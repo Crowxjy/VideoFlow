@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 视频工作台</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- 左侧导航 -->
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m4 6 6 4-6 4z"/><rect x="11" y="4" width="9" height="12" rx="2"/></svg>
+        </span>
+        <span class="brand-text">AI 视频工作台</span>
+      </div>
+
+      <nav class="nav" id="nav"></nav>
+    </aside>
+
+    <!-- 主区 -->
+    <main class="stage">
+      <header class="topbar">
+        <div class="crumb" id="crumb"></div>
+        <div class="topbar-actions" id="topbarActions"></div>
+      </header>
+      <section class="view" id="view"></section>
+    </main>
+
+    <!-- 右侧抽屉：素材库 -->
+    <div class="drawer-scrim" id="drawerScrim"></div>
+    <aside class="drawer" id="drawer" aria-hidden="true"></aside>
+  </div>
+
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

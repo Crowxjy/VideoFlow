@@ -1,0 +1,770 @@
+openapi: 3.1.0
+info:
+  title: AI 视频工作台 API
+  description: >-
+    面向企业的 AI 视频创作平台后端接口。覆盖需求澄清（多轮对话）、脚本生成、
+    素材异步生成、资产库管理与后期剪辑（P1）。异步生成统一采用「提交任务 → 轮询/Webhook」模式。
+  version: 0.1.0
+servers:
+  - url: https://api.videoflow.example.com/v1
+    description: 生产环境
+  - url: http://localhost:8080/v1
+    description: 本地 Mock
+
+tags:
+  - name: Project
+    description: 项目
+  - name: Brief
+    description: 需求单与多轮对话
+  - name: Script
+    description: 脚本 / 分幕 / 分镜 / Prompt
+  - name: Gen
+    description: 异步素材生成任务
+  - name: Asset
+    description: 资产库（角色 / 场景 / 通用）
+  - name: Timeline
+    description: 时间轴与剪辑（P1）
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------------- Project ----------------
+  /projects:
+    get:
+      tags: [Project]
+      summary: 项目列表
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ProjectStatus' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/Project' }
+    post:
+      tags: [Project]
+      summary: 创建项目
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+
+  /projects/{projectId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Project]
+      summary: 项目详情
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Project]
+      summary: 更新项目
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectUpdate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+    delete:
+      tags: [Project]
+      summary: 删除项目
+      responses:
+        '204': { description: No Content }
+
+  # ---------------- Brief / Dialogue ----------------
+  /projects/{projectId}/brief:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Brief]
+      summary: 获取需求单
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Brief' }
+
+  /projects/{projectId}/dialogue:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Brief]
+      summary: 对话历史
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DialogueMessage' }
+    post:
+      tags: [Brief]
+      summary: 发送一条用户消息，返回 AI 回复并增量更新需求单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reply: { $ref: '#/components/schemas/DialogueMessage' }
+                  brief: { $ref: '#/components/schemas/Brief' }
+
+  # ---------------- Script ----------------
+  /projects/{projectId}/script:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Script]
+      summary: 获取脚本
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Script' }
+
+  /projects/{projectId}/script:generate:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [Script]
+      summary: 基于需求单生成（或重生）脚本，返回生成任务
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenTask' }
+        '409':
+          description: 需求单未达到生成所需完备度
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /scenes/{sceneNodeId}:
+    parameters:
+      - name: sceneNodeId
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      tags: [Script]
+      summary: 编辑某一幕（标题/目标/旁白/场景引用/角色/动效）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SceneNodeUpdate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SceneNode' }
+
+  /scenes/{sceneNodeId}/prompts:
+    parameters:
+      - name: sceneNodeId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Script]
+      summary: 获取该幕的三类 Prompt（角色参考图/关键帧/动效）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Prompt' }
+    put:
+      tags: [Script]
+      summary: 批量更新该幕 Prompt（编辑后保存）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: '#/components/schemas/Prompt' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Prompt' }
+
+  # ---------------- Gen tasks ----------------
+  /gen-tasks:
+    get:
+      tags: [Gen]
+      summary: 生成任务队列
+      parameters:
+        - name: projectId
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/TaskStatus' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GenTask' }
+    post:
+      tags: [Gen]
+      summary: 提交一个或一批生成任务（关键帧/视频/动效/参考图/配音/BGM）
+      description: >-
+        异步执行。返回任务后请轮询 GET /gen-tasks/{taskId}，
+        或通过订阅 Webhook 接收完成回调。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, items]
+              properties:
+                projectId: { type: string }
+                items:
+                  type: array
+                  items: { $ref: '#/components/schemas/GenTaskCreate' }
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GenTask' }
+
+  /gen-tasks/{taskId}:
+    parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Gen]
+      summary: 查询任务状态（轮询）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenTask' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /gen-tasks/{taskId}:retry:
+    parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Gen]
+      summary: 重试失败任务
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenTask' }
+
+  /gen-tasks/{taskId}:cancel:
+    parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Gen]
+      summary: 取消排队/执行中的任务
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenTask' }
+
+  # ---------------- Assets ----------------
+  /projects/{projectId}/characters:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Asset]
+      summary: 角色列表
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Character' }
+    post:
+      tags: [Asset]
+      summary: 新建角色（上传或 AI 生成参考图）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CharacterCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Character' }
+
+  /characters/{characterId}:lock:
+    parameters:
+      - name: characterId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Asset]
+      summary: 锁定/重新锁定角色形象（一致性）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Character' }
+
+  /projects/{projectId}/scenes:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Asset]
+      summary: 场景列表
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Scene' }
+    post:
+      tags: [Asset]
+      summary: 新建场景
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SceneCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Scene' }
+
+  /projects/{projectId}/generic:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Asset]
+      summary: 通用素材列表（Logo / BGM 等）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GenericAsset' }
+
+  # ---------------- Timeline (P1) ----------------
+  /projects/{projectId}/timeline:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Timeline]
+      summary: 获取时间轴
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Timeline' }
+    put:
+      tags: [Timeline]
+      summary: 保存时间轴编辑结果
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Timeline' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Timeline' }
+
+  /projects/{projectId}/export:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [Timeline]
+      summary: 导出成片（异步）
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenTask' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema: { type: string }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  responses:
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: NOT_FOUND }
+        message: { type: string }
+        details: { type: object, additionalProperties: true }
+
+    Page:
+      type: object
+      properties:
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer }
+
+    ProjectStatus:
+      type: string
+      enum: [drafting, scripting, generating, editing, done, archived]
+    TaskStatus:
+      type: string
+      enum: [queued, running, done, failed, canceled]
+    AssetState:
+      type: string
+      enum: [pending, generating, done, failed]
+    GenKind:
+      type: string
+      enum: [char_ref, keyframe, fx, video, voice, bgm]
+    FxIntensity:
+      type: string
+      enum: [low, mid, high]
+
+    ProjectSpec:
+      type: object
+      required: [duration_s, aspect, lang, style]
+      properties:
+        duration_s: { type: integer }
+        aspect: { type: string, enum: ['16:9', '9:16', '1:1', '4:3'] }
+        lang: { type: string, enum: [zh, en, ja] }
+        style: { type: string }
+    Project:
+      type: object
+      required: [id, name, status, spec]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/ProjectStatus' }
+        spec: { $ref: '#/components/schemas/ProjectSpec' }
+        ownerId: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ProjectCreate:
+      type: object
+      required: [name, spec]
+      properties:
+        name: { type: string }
+        spec: { $ref: '#/components/schemas/ProjectSpec' }
+    ProjectUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        status: { $ref: '#/components/schemas/ProjectStatus' }
+        spec: { $ref: '#/components/schemas/ProjectSpec' }
+
+    Brief:
+      type: object
+      properties:
+        projectId: { type: string }
+        completeness: { type: integer, minimum: 0, maximum: 100 }
+        fields:
+          type: array
+          items: { $ref: '#/components/schemas/BriefField' }
+    BriefField:
+      type: object
+      required: [k, v, done]
+      properties:
+        k: { type: string }
+        v: { type: string }
+        done: { type: boolean }
+
+    DialogueMessage:
+      type: object
+      required: [role, text]
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [ai, me] }
+        text: { type: string }
+        chips:
+          type: array
+          items: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    Script:
+      type: object
+      properties:
+        projectId: { type: string }
+        global: { $ref: '#/components/schemas/ScriptGlobal' }
+        scenes:
+          type: array
+          items: { $ref: '#/components/schemas/SceneNode' }
+    ScriptGlobal:
+      type: object
+      properties:
+        scenes: { type: integer }
+        duration_s: { type: integer }
+        style: { type: string }
+        bgm: { type: string }
+        narration: { type: string }
+
+    FxSpec:
+      type: object
+      required: [need, type]
+      properties:
+        need: { type: boolean }
+        type: { type: string }
+        intensity: { $ref: '#/components/schemas/FxIntensity' }
+    SceneCharRef:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+    SceneNode:
+      type: object
+      required: [id, order, title]
+      properties:
+        id: { type: string }
+        order: { type: integer }
+        title: { type: string }
+        goal: { type: string }
+        sceneRef: { type: string }
+        sceneRefId: { type: string }
+        chars:
+          type: array
+          items: { $ref: '#/components/schemas/SceneCharRef' }
+        fx: { $ref: '#/components/schemas/FxSpec' }
+        narration: { type: string }
+        kfState: { $ref: '#/components/schemas/AssetState' }
+        kf: { type: [string, 'null'] }
+    SceneNodeUpdate:
+      type: object
+      properties:
+        title: { type: string }
+        goal: { type: string }
+        narration: { type: string }
+        sceneRefId: { type: string }
+        chars:
+          type: array
+          items: { $ref: '#/components/schemas/SceneCharRef' }
+        fx: { $ref: '#/components/schemas/FxSpec' }
+
+    Prompt:
+      type: object
+      required: [kind, label, text]
+      properties:
+        id: { type: string }
+        kind: { $ref: '#/components/schemas/GenKind' }
+        label: { type: string }
+        hint: { type: string }
+        text: { type: string }
+        version: { type: integer }
+
+    GenTaskCreate:
+      type: object
+      required: [kind]
+      properties:
+        kind: { $ref: '#/components/schemas/GenKind' }
+        refId: { type: string, description: 关联 SceneNode / Shot / Character }
+        promptText: { type: string }
+        prompt: { type: string, description: 生成提示词（透传给模型 Provider） }
+        model: { type: string, description: 指定模型；留空由 Provider 默认 }
+        refImageUrl: { type: string, description: 参考图 URL（图生图 / 图生视频） }
+        webhook: { type: string, format: uri, description: 任务完成回调地址（可空） }
+    GenTask:
+      type: object
+      required: [id, title, status, progress]
+      properties:
+        id: { type: string }
+        projectId: { type: string }
+        kind: { $ref: '#/components/schemas/GenKind' }
+        title: { type: string }
+        sub: { type: string }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        thumb: { type: [string, 'null'] }
+        refId: { type: string }
+        mediaId: { type: string }
+        model: { type: string, description: 实际使用的模型标识 }
+        error: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Media:
+      type: object
+      required: [id, kind, url]
+      properties:
+        id: { type: string }
+        kind: { $ref: '#/components/schemas/GenKind' }
+        url: { type: string }
+        mime: { type: string }
+        width: { type: integer }
+        height: { type: integer }
+        durationS: { type: integer }
+        hasAlpha: { type: boolean }
+        version: { type: integer }
+        taskId: { type: string }
+
+    Character:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        locked: { type: boolean }
+        version: { type: integer }
+        voice: { type: string }
+        desc: { type: string }
+        img: { type: [string, 'null'] }
+    CharacterCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        voice: { type: string }
+        desc: { type: string }
+        refImageUrl: { type: string, description: 上传的参考图；留空则触发 AI 生成 }
+
+    Scene:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        desc: { type: string }
+        img: { type: [string, 'null'] }
+    SceneCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        desc: { type: string }
+
+    GenericAsset:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        desc: { type: string }
+        type: { type: string, description: 素材类型（logo / audio / other 等） }
+
+    Clip:
+      type: object
+      required: [type, label, w]
+      properties:
+        type: { type: string, enum: [video, trans, audio, voice, sub] }
+        label: { type: string }
+        w: { type: integer }
+        ml: { type: integer }
+        mediaId: { type: string }
+    Timeline:
+      type: object
+      properties:
+        projectId: { type: string }
+        tracks:
+          type: object
+          properties:
+            video: { type: array, items: { $ref: '#/components/schemas/Clip' } }
+            audio: { type: array, items: { $ref: '#/components/schemas/Clip' } }
+            voice: { type: array, items: { $ref: '#/components/schemas/Clip' } }
+            sub:   { type: array, items: { $ref: '#/components/schemas/Clip' } }

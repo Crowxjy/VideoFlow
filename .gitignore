@@ -1,0 +1,30 @@
+# macOS noise
+.DS_Store
+**/.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# Local runtime data (contains API keys & user-generated content)
+data/settings.json
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Generated media artifacts (large, regeneratable)
+media/
+
+# Logs
+*.log
+
+# Trae 工作目录
+.trae/

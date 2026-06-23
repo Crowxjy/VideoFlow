@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs><linearGradient id="cb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#503a52"/><stop offset="1" stop-color="#3a2a3e"/></linearGradient></defs>
+  <rect width="120" height="120" fill="url(#cb)"/>
+  <circle cx="60" cy="48" r="22" fill="#86607e"/>
+  <path d="M22 110 q38 -46 76 0z" fill="#86607e"/>
+  <text x="60" y="116" font-size="9" fill="#d8c0d0" text-anchor="middle" font-family="sans-serif">客户 B</text>
+</svg>
