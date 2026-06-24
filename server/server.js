@@ -181,8 +181,26 @@ const server = createServer(async (req, res) => {
           if (!text) return fail(res, 400, "BAD_REQUEST", "text 必填");
           return streamDialogue(req, res, pid, text);
         }
+        // PUT /projects/{id}/dialogue  外部 Agent 直接落库一对 user/ai 消息（用 Agent 自己的模型生成时使用）
+        if (m === "PUT") {
+          const body = await readBody(req);
+          const user = (body?.user || "").toString();
+          const reply = (body?.reply || "").toString();
+          const chips = Array.isArray(body?.chips) ? body.chips : [];
+          if (user) dao.addDialogue(pid, "me", user, []);
+          if (reply) dao.addDialogue(pid, "ai", reply, chips);
+          return json(res, 200, { ok: true, dialogue: dao.getDialogue(pid) });
+        }
       }
       if (seg[2] === "script" && m === "GET") return json(res, 200, dao.getScript(pid));
+      // PUT /projects/{id}/script  外部 Agent 直接写入完整脚本（用 Agent 自己的模型生成时使用）
+      if (seg[2] === "script" && m === "PUT") {
+        const script = await readBody(req);
+        if (!script || typeof script !== "object")
+          return fail(res, 400, "BAD_REQUEST", "需要 JSON body：完整 script 对象");
+        const saved = dao.saveScript(pid, script);
+        return json(res, 200, saved);
+      }
       // POST /projects/{id}/script:generate
       if (seg[2] && seg[2].startsWith("script:") && m === "POST") {
         const action = seg[2].slice("script:".length);

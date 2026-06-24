@@ -1,0 +1,18 @@
+{
+  "name": "videoflow-cli",
+  "version": "0.1.0",
+  "description": "VideoFlow CLI — 让第三方 Agent 通过命令行驱动 VideoFlow 后端 (REST + SSE)",
+  "type": "module",
+  "main": "videoflow.mjs",
+  "bin": {
+    "videoflow": "videoflow.mjs"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "files": [
+    "videoflow.mjs",
+    "lib/",
+    "README.md"
+  ]
+}
