@@ -83,6 +83,31 @@ export function makeClient({ base, token, projectId } = {}) {
     return res.json();
   }
 
+  // ---- 交付宿主 Agent 生成的媒体产物（文生图/配音/视频等），绑定到分镜/角色 ----
+  async function ingestMedia(filePath, { kind, refId, width, height, durationS, hasAlpha } = {}) {
+    const { readFile } = await import("node:fs/promises");
+    const { extname } = await import("node:path");
+    const buf = await readFile(filePath);
+    const ext = extname(filePath) || ".bin";
+    const mime = guessMime(ext);
+    const params = new URLSearchParams({ kind: kind || "", mime, ext });
+    if (refId) params.set("refId", refId);
+    if (width) params.set("width", String(width));
+    if (height) params.set("height", String(height));
+    if (durationS) params.set("durationS", String(durationS));
+    if (hasAlpha) params.set("hasAlpha", "1");
+    const res = await fetch(`${_base}/projects/${pidOrThrow()}/media:ingest?${params}`, {
+      method: "POST",
+      headers: _token ? { "Content-Type": mime, Authorization: "Bearer " + _token } : { "Content-Type": mime },
+      body: buf,
+    });
+    if (!res.ok) {
+      let err; try { err = await res.json(); } catch { err = { message: res.statusText }; }
+      throw Object.assign(new Error(err.message || `交付失败(${res.status})`), { status: res.status, body: err });
+    }
+    return res.json();
+  }
+
   return {
     config: () => ({ base: _base, hasToken: !!_token, projectId: _pid }),
     setBase: (v) => { _base = v.replace(/\/$/, ""); },
@@ -115,7 +140,9 @@ export function makeClient({ base, token, projectId } = {}) {
     getCharacters: () => http("GET", `/projects/${pidOrThrow()}/characters`),
     getScenes: () => http("GET", `/projects/${pidOrThrow()}/scenes`),
     getGeneric: () => http("GET", `/projects/${pidOrThrow()}/generic`),
+    getScenePrompts: (sceneNodeId) => http("GET", `/scenes/${sceneNodeId}/prompts`),
     uploadGenericAsset,
+    ingestMedia,
     deleteGenericAsset: (id) => http("DELETE", `/generic-assets/${id}`),
 
     // 生成任务

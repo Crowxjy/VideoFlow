@@ -58,14 +58,78 @@ videoflow gen tasks --json
 videoflow export > cut.json
 ```
 
+## 宿主 Agent 全托管模式（最大化利用宿主模型能力）
+
+当宿主 Agent 自带 LLM / 文生图 / 配音等能力时，可让宿主亲自产出内容，
+VideoFlow 后端只做**落库 + 兜底**。核心是 `plan → (宿主生成) → apply/ingest` 三段式，
+按**能力类型**逐类协商，宿主做不了或后端通道未配置时自动降级，**互不阻断**。
+
+**能力分工总览：**
+
+| 环节 | kind | 宿主优先命令 | 后端兜底 |
+|------|------|-------------|----------|
+| 需求对话 | dialogue | `chat plan` → `chat apply` | `chat send`（需 chat 通道） |
+| 脚本 | — | `script plan` → `script apply` | `script generate`（需 chat 通道） |
+| 角色参考图 / 关键帧 | char_ref / keyframe | `gen plan` → `gen ingest` | `gen submit`（需 openai 通道） |
+| 配音 | voice | `gen plan` → `gen ingest` | `gen submit`（需 volcTts 通道） |
+| 视频 / 动效 | video / fx | `gen plan` → `gen ingest` | `gen submit`（需 ark 通道） |
+
+**文本环节（chat / script）：**
+
+```bash
+# 需求对话：CLI 只吐 prompt + 上下文，宿主 Agent 用自己的模型产出 JSON 再回写
+videoflow chat plan "<用户消息>" --json
+# → { system, user, schema:{reply,patch,chips}, brief, history, knownKeys }
+# 宿主 LLM 按 schema 产出 {reply,patch,chips}，写入文件后：
+videoflow chat apply --from=<reply.json>        # 或 --reply='<inline-json>'
+
+# 脚本同理
+videoflow script plan --json
+# → { system, user, schema, project, brief, characters }
+videoflow script apply --from=<script.json>
+```
+
+**媒体环节（文生图 / 配音 / 视频）：**
+
+```bash
+# 1) 拉取每幕媒体清单：含已存 prompt、后端通道是否就绪、是否已产出
+videoflow gen plan --json
+# → { items:[ { kind, refId, prompt, backendReady, backendChannel } ], channelStatus }
+
+# 2) 宿主 Agent 对自己「能做」的 kind 生成文件（如会文生图就出 png），
+#    写一份 manifest 后批量回写并自动绑定到分镜/角色：
+videoflow gen ingest --from=<manifest.json> --json
+#   manifest 形如：
+#   { "items": [
+#       { "kind":"char_ref", "refId":"c_anna",           "file":"./anna.png" },
+#       { "kind":"keyframe",  "refId":"sn_xxx",           "file":"./kf1.png"  },
+#       { "kind":"voice",     "refId":"sn_xxx",           "file":"./vo1.mp3", "durationS":4 }
+#   ] }
+
+# 3) 宿主做不了的部分，交后端兜底。submit 会自动：
+#    - 跳过已 ingest 的 (kind,refId)          → reason: already-done
+#    - 跳过后端未配置通道对应的 kind          → reason: channel-not-ready(<channel>)
+videoflow gen submit --json
+# 也可显式白名单 / 强制：
+videoflow gen submit --kinds=keyframe,voice --json   # 只提交这些 kind
+videoflow gen submit --force --json                  # 无视通道就绪度强行提交
+
+# 4) 导出：ingest 与 submit 产出统一聚合，视频缺失不阻断
+videoflow export > cut.json
+```
+
+**关键点：宿主没有视频能力不是卡点。** 宿主只出它能出的（如图 + 文案），
+`gen plan` 会标出哪些 kind `backendReady`，剩下的交后端；后端 ark 也没配时，
+video/fx 被自动跳过，工作流照样交付「脚本 + 关键帧 + 配音 + 剪辑清单」这一有效部分。
+
 ## 关键命令清单
 
 ```
 projects { list | create <name> [--aspect=16:9 --lang=zh] | use <id> | show | delete <id> }
 brief    { get | set <key> <value> | delete <key> }
-chat     { send <text> | history }
-script   { generate | show }
-gen      { submit | tasks [--status=...] | task <id> | retry <id> | cancel <id> }
+chat     { send <text> | history | plan <text> | apply --from=<path> }
+script   { generate | show | plan | apply --from=<path> }
+gen      { submit [--kinds=.. --force] | plan | ingest --from=<manifest> | tasks [--status=..] | task <id> | retry <id> | cancel <id> }
 generic  { list | upload <file> [--name --type --desc] | delete <id> }
 settings { get | set <group.key> <value> }
 export

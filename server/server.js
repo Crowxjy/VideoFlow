@@ -238,6 +238,32 @@ const server = createServer(async (req, res) => {
           url: row.url, mime: row.mime, size: row.size, createdAt: row.created_at });
       }
       if (seg[2] === "timeline" && m === "GET") return json(res, 200, dao.getTimeline(pid));
+      // POST /projects/{id}/media:ingest?kind=&refId=  外部 Agent 交付媒体产物（文生图/配音/视频等）
+      // 二进制流上传：宿主 Agent 用自身能力生成后回写，跳过后端生成通道。
+      if (seg[2] === "media:ingest" && m === "POST") {
+        const kind = url.searchParams.get("kind") || "";
+        const refId = url.searchParams.get("refId") || "";
+        const mime = url.searchParams.get("mime") || req.headers["content-type"] || "application/octet-stream";
+        const ext  = url.searchParams.get("ext") || extToExt(mime);
+        const width  = Number(url.searchParams.get("width"))  || null;
+        const height = Number(url.searchParams.get("height")) || null;
+        const durationS = Number(url.searchParams.get("durationS")) || null;
+        const hasAlpha = url.searchParams.get("hasAlpha") === "1";
+        const KINDS = ["char_ref", "keyframe", "fx", "video", "voice"];
+        if (!KINDS.includes(kind)) return fail(res, 400, "BAD_REQUEST", `kind 必须是 ${KINDS.join("/")}`);
+        let buf;
+        try { buf = await readBinary(req); }
+        catch (e) { return fail(res, 413, "PAYLOAD_TOO_LARGE", e.message); }
+        if (!buf.length) return fail(res, 400, "BAD_REQUEST", "文件内容为空");
+        await mkdir(MEDIA_DIR, { recursive: true });
+        const fname = `ing_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}${ext}`;
+        await writeFile(join(MEDIA_DIR, fname), buf);
+        const r = dao.ingestMedia(pid, {
+          kind, refId: refId || null, url: `/media/${fname}`, mime,
+          width, height, duration_s: durationS, has_alpha: hasAlpha,
+        });
+        return json(res, 201, { ok: true, kind, refId: refId || null, ...r, mime, size: buf.length });
+      }
       if (seg[2] === "export" && m === "POST") {
         const t = dao.createExport(pid);
         dao.touchProjectStatus(pid, "editing");

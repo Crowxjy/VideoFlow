@@ -436,6 +436,22 @@ export function makeDao(db) {
   // 关键帧产物挂回对应幕
   const attachKeyframe = (sceneNodeId, url) =>
     q(`UPDATE scene_node SET kf_state='done', kf=? WHERE id=?`).run(url, sceneNodeId);
+  // 角色参考图挂回角色
+  const setCharacterImg = (charId, url) =>
+    q(`UPDATE character SET img=? WHERE id=?`).run(url, charId);
+
+  // 外部 Agent 直接交付的媒体产物：建一条 done 任务 + 写 media，并按 kind 绑定到分镜/角色。
+  // 复用 queue 成功路径的落库形态，使 export / gen tasks 无需区分来源即可聚合。
+  const ingestMedia = (pid, { kind, refId, url, mime, width, height, duration_s, has_alpha }) => {
+    const task = createTask(pid, { kind, refId });
+    const mediaId = addMedia(pid, { kind, task_id: task.id, url, mime, width, height, duration_s, has_alpha });
+    const patch = { status: "done", progress: 100, media_id: mediaId };
+    if (mime && mime.startsWith("image")) patch.thumb = url;
+    updateTask(task.id, patch);
+    if (kind === "keyframe" && refId) attachKeyframe(refId, url);
+    if (kind === "char_ref" && refId) setCharacterImg(refId, url);
+    return { taskId: task.id, mediaId, url };
+  };
 
   const createExport = (pid) =>
     createTask(pid, { kind: "video", refId: null, model: "compose" });
@@ -472,7 +488,8 @@ export function makeDao(db) {
   return {
     getProject, getBrief, getDialogue, getScript, getCharacters, getScenes, getGeneric,
     getTasks, getTask, getTimeline, addDialogue, upsertPrompt, getPrompts, lockCharacter,
-    createTask, updateTask, rawTask, addMedia, attachKeyframe, createExport, touchProjectStatus,
+    createTask, updateTask, rawTask, addMedia, attachKeyframe, setCharacterImg, ingestMedia,
+    createExport, touchProjectStatus,
     upsertBriefPatch, tagLastUserMessage,
     listProjects, createProject, updateProject, deleteProject,
     patchBriefFields, saveScript,

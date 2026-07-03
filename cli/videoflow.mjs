@@ -72,6 +72,15 @@ function out(data, hint) {
 }
 function fail(msg, code = 1) { console.error("✗ " + msg); process.exit(code); }
 
+// 把 health.channelStatus 反转成 kind -> { ready, channel }，供 gen 命令判断通道就绪度
+function kindReadiness(channelStatus = {}) {
+  const map = {};
+  for (const [channel, v] of Object.entries(channelStatus)) {
+    for (const kind of v.kinds || []) map[kind] = { ready: !!v.ready, channel };
+  }
+  return map;
+}
+
 // ---------- 帮助 ----------
 const HELP = `videoflow ${PKG.version} — VideoFlow CLI
 
@@ -115,7 +124,10 @@ const HELP = `videoflow ${PKG.version} — VideoFlow CLI
   generic upload <file>         上传素材 [--name=.. --type=.. --desc=..]
   generic delete <id>           删除通用素材
 
-  gen submit                    按当前脚本提交全部生成任务 (char/key/fx/video)
+  gen submit                    按当前脚本提交生成任务 (自动跳过已交付/未就绪通道)
+                                [--kinds=keyframe,voice 白名单] [--force 不跳过未就绪通道]
+  gen plan                      输出每幕可生成的媒体清单+prompt+通道就绪度，交宿主 Agent 自产
+  gen ingest --from=<manifest>  把宿主 Agent 产出的媒体文件上传并绑定到分镜/角色
   gen tasks [--status=done]     列出生成任务
   gen task <id>                 查询单个任务
   gen retry <id>                重试失败任务
@@ -448,20 +460,123 @@ async function genericCmd(sub, args) {
 }
 
 // ---------- gen 任务 ----------
+// 依据脚本推导出「本应生成」的媒体清单：每个 char_ref/keyframe/fx/video/voice 及其 refId
+function deriveGenItems(script) {
+  const items = [];
+  (script.scenes || []).forEach(s => {
+    (s.chars || []).forEach(c => items.push({ kind: "char_ref", refId: c.id, sceneId: s.id, name: c.name }));
+    items.push({ kind: "keyframe", refId: s.id, sceneId: s.id, title: s.title });
+    if (s.fx?.need) items.push({ kind: "fx", refId: s.id, sceneId: s.id, title: s.title });
+    items.push({ kind: "video", refId: s.id, sceneId: s.id, title: s.title });
+    if (s.narration) items.push({ kind: "voice", refId: s.id, sceneId: s.id, title: s.title });
+  });
+  return items;
+}
+
 async function genCmd(sub, args) {
   if (sub === "submit") {
-    // 复用前端逻辑：拉脚本 → 汇总 items
     const script = await client.getScript();
-    if (!script?.scenes?.length) return fail("脚本尚未生成，先 `videoflow script generate`", 1);
-    const items = [];
-    script.scenes.forEach(s => {
-      (s.chars || []).forEach(c => items.push({ kind: "char_ref", refId: c.id }));
-      items.push({ kind: "keyframe", refId: s.id });
-      if (s.fx?.need) items.push({ kind: "fx", refId: s.id });
-      items.push({ kind: "video", refId: s.id });
+    if (!script?.scenes?.length) return fail("脚本尚未生成，先 `videoflow script generate` 或 `videoflow script apply`", 1);
+    const readiness = kindReadiness((await client.health()).channelStatus);
+    // 已交付：已有 done media 的 (kind, refId) 不再重复提交（宿主 ingest 或后端上一轮已产出）
+    const doneRes = await client.listTasks("done");
+    const doneTasks = (doneRes.items || doneRes || []).filter(t => t.refId);
+    const doneSet = new Set(doneTasks.map(t => `${t.kind}:${t.refId}`));
+    const whitelist = flags.kinds ? new Set(String(flags.kinds).split(",").map(s => s.trim()).filter(Boolean)) : null;
+
+    const all = deriveGenItems(script);
+    const submit = [], skipped = [];
+    for (const it of all) {
+      if (whitelist && !whitelist.has(it.kind)) { skipped.push({ ...it, reason: "not-in-kinds" }); continue; }
+      if (doneSet.has(`${it.kind}:${it.refId}`)) { skipped.push({ ...it, reason: "already-done" }); continue; }
+      const ready = readiness[it.kind]?.ready;
+      if (!ready && !flags.force) { skipped.push({ ...it, reason: `channel-not-ready(${readiness[it.kind]?.channel || "?"})` }); continue; }
+      submit.push({ kind: it.kind, refId: it.refId });
+    }
+    let created = [];
+    if (submit.length) {
+      const r = await client.submitGen(submit);
+      created = Array.isArray(r) ? r : (r.items || r.created || []);
+    }
+    out({ submitted: submit.length, skipped: skipped.length, created, skippedDetail: skipped },
+        () => {
+          console.log(`✓ 已提交 ${submit.length} 项，跳过 ${skipped.length} 项`);
+          const byReason = skipped.reduce((m, s) => (m[s.reason] = (m[s.reason] || 0) + 1, m), {});
+          for (const [r, n] of Object.entries(byReason)) console.log(`  · ${r}: ${n}`);
+        });
+    return;
+  }
+  // gen plan: 输出每幕媒体清单 + 已存 prompt + 通道就绪度，交宿主 Agent 自产
+  if (sub === "plan") {
+    const script = await client.getScript();
+    if (!script?.scenes?.length) return fail("脚本尚未生成，先 `videoflow script generate` 或 `videoflow script apply`", 1);
+    const readiness = kindReadiness((await client.health()).channelStatus);
+    const doneRes = await client.listTasks("done");
+    const doneTasks = (doneRes.items || doneRes || []).filter(t => t.refId);
+    const doneSet = new Set(doneTasks.map(t => `${t.kind}:${t.refId}`));
+    // 每幕的 prompts（char_/kf/fx 已在脚本生成时落库；voice 用旁白文本）
+    const promptsByScene = {};
+    await Promise.all((script.scenes || []).map(async s => {
+      promptsByScene[s.id] = await client.getScenePrompts(s.id).catch(() => []);
+    }));
+    const items = deriveGenItems(script).map(it => {
+      const ps = promptsByScene[it.sceneId] || [];
+      let prompt = "";
+      if (it.kind === "char_ref") prompt = ps.find(p => p.key === `char_${it.refId}`)?.text || "";
+      else if (it.kind === "keyframe") prompt = ps.find(p => p.key === "kf")?.text || "";
+      else if (it.kind === "fx") prompt = ps.find(p => p.key === "fx")?.text || "";
+      else if (it.kind === "voice") prompt = (script.scenes.find(s => s.id === it.sceneId)?.narration) || "";
+      // video 无独立 prompt，复用 keyframe 语义
+      else if (it.kind === "video") prompt = ps.find(p => p.key === "kf")?.text || "";
+      return {
+        kind: it.kind, refId: it.refId, sceneId: it.sceneId,
+        label: it.name || it.title || "",
+        prompt,
+        backendReady: !!readiness[it.kind]?.ready,
+        backendChannel: readiness[it.kind]?.channel || null,
+        alreadyDone: doneSet.has(`${it.kind}:${it.refId}`),
+      };
+    }).filter(it => !it.alreadyDone);
+    out({
+      mode: "gen.plan",
+      note: "宿主 Agent 若具备对应能力，请生成媒体文件后用 `gen ingest --from=<manifest>` 回写；" +
+            "无力生成的项，通道 backendReady=true 时可交后端 `gen submit`。",
+      channelStatus: readiness,
+      items,
     });
-    const r = await client.submitGen(items);
-    out({ submitted: items.length, ...r }, () => console.log(`✓ 已提交 ${items.length} 项任务`));
+    return;
+  }
+  // gen ingest --from=<manifest.json>: 把宿主产出的媒体文件逐条上传绑定
+  // manifest: { items: [ { kind, refId, file, width?, height?, durationS?, hasAlpha? } ] }
+  if (sub === "ingest") {
+    const src = flags.from || args[0];
+    if (!src) return fail("用法: videoflow gen ingest --from=<manifest.json>", 2);
+    let manifest;
+    try { manifest = JSON.parse(readFileSync(src, "utf8")); }
+    catch (e) { return fail(`解析 manifest 失败: ${e.message}`, 2); }
+    const list = Array.isArray(manifest) ? manifest : (manifest.items || []);
+    if (!list.length) return fail("manifest 里没有 items", 2);
+    const results = [];
+    for (const it of list) {
+      if (!it.kind || !it.file) { results.push({ ...it, ok: false, error: "缺少 kind 或 file" }); continue; }
+      const abs = resolve(process.cwd(), it.file);
+      if (!existsSync(abs)) { results.push({ ...it, ok: false, error: `文件不存在: ${abs}` }); continue; }
+      try {
+        const r = await client.ingestMedia(abs, {
+          kind: it.kind, refId: it.refId,
+          width: it.width, height: it.height, durationS: it.durationS, hasAlpha: it.hasAlpha,
+        });
+        results.push({ kind: it.kind, refId: it.refId, ok: true, mediaId: r.mediaId, url: r.url });
+      } catch (e) {
+        results.push({ kind: it.kind, refId: it.refId, ok: false, error: e.message });
+      }
+    }
+    const okN = results.filter(r => r.ok).length;
+    out({ ingested: okN, failed: results.length - okN, results },
+        () => {
+          console.log(`✓ 交付 ${okN} 项，失败 ${results.length - okN} 项`);
+          results.filter(r => !r.ok).forEach(r => console.log(`  ✗ ${r.kind} ${r.refId || ""}: ${r.error}`));
+        });
     return;
   }
   if (sub === "tasks" || !sub) {
