@@ -28,9 +28,14 @@ const DEFAULT_SETTINGS = {
   ark: {
     apiKey:    process.env.ARK_API_KEY         || "",
     baseUrl:   process.env.ARK_BASE_URL        || "https://ark.cn-beijing.volces.com/api/v3",
-    model:     process.env.ARK_VIDEO_MODEL     || "doubao-seedance-1-0-pro-250528",
+    model:     process.env.ARK_VIDEO_MODEL     || "doubao-seedance-2-0-fast-260128",
     ratio:     process.env.ARK_VIDEO_RATIO     || "16:9",
+    resolution: process.env.ARK_VIDEO_RESOLUTION || "720p",
     durationS: Number(process.env.ARK_VIDEO_DURATION || 5),
+    generateAudio: process.env.ARK_VIDEO_GEN_AUDIO ? process.env.ARK_VIDEO_GEN_AUDIO === "true" : true,
+    seed:      Number(process.env.ARK_VIDEO_SEED ?? -1),
+    watermark: process.env.ARK_VIDEO_WATERMARK === "true",
+    returnLastFrame: process.env.ARK_VIDEO_RETURN_LAST_FRAME === "true",
     publicBaseUrl: process.env.VF_PUBLIC_BASE_URL || "",
   },
   volcTts: {
@@ -86,12 +91,16 @@ const SETTINGS_SCHEMA = {
       { key: "baseUrl",       label: "Base URL",         required: false, secret: false, hint: "默认 https://ark.cn-beijing.volces.com/api/v3" },
       { key: "model",         label: "模型",             required: false, secret: false, type: "enum-open",
         options: [
-          { value: "doubao-seedance-1-0-pro-250528", label: "doubao-seedance-1-0-pro-250528（推荐）" },
-          { value: "doubao-seedance-1-0-lite-i2v-250428", label: "doubao-seedance-1-0-lite-i2v-250428（图生视频）" },
-          { value: "doubao-seedance-1-0-lite-t2v-250428", label: "doubao-seedance-1-0-lite-t2v-250428（文生视频）" },
+          { value: "doubao-seedance-2-0-fast-260128", label: "doubao-seedance-2-0-fast-260128（2.0 快速版·推荐）" },
+          { value: "doubao-seedance-2-0-260128", label: "doubao-seedance-2-0-260128（2.0 标准版·支持 1080p）" },
+          { value: "doubao-seedance-1-5-pro-251215", label: "doubao-seedance-1-5-pro-251215（1.5 Pro）" },
+          { value: "doubao-seedance-1-0-pro-250528", label: "doubao-seedance-1-0-pro-250528（1.0 Pro）" },
+          { value: "doubao-seedance-1-0-lite-i2v-250428", label: "doubao-seedance-1-0-lite-i2v-250428（1.0 图生视频）" },
+          { value: "doubao-seedance-1-0-lite-t2v-250428", label: "doubao-seedance-1-0-lite-t2v-250428（1.0 文生视频）" },
         ] },
       { key: "ratio",         label: "画幅比例",         required: false, secret: false, type: "enum",
         options: [
+          { value: "adaptive", label: "adaptive（自适应）" },
           { value: "16:9", label: "16:9（横屏宽）" },
           { value: "9:16", label: "9:16（竖屏）" },
           { value: "1:1",  label: "1:1（方形）" },
@@ -99,10 +108,35 @@ const SETTINGS_SCHEMA = {
           { value: "3:4",  label: "3:4" },
           { value: "21:9", label: "21:9（电影超宽）" },
         ] },
+      { key: "resolution",    label: "分辨率",           required: false, secret: false, type: "enum",
+        options: [
+          { value: "480p",  label: "480p" },
+          { value: "720p",  label: "720p（推荐）" },
+          { value: "1080p", label: "1080p（fast 版不支持）" },
+        ] },
       { key: "durationS",     label: "时长（秒）",       required: false, secret: false, type: "enum",
         options: [
+          { value: -1, label: "-1（模型自动）" },
+          { value: 4,  label: "4 秒" },
           { value: 5,  label: "5 秒" },
+          { value: 6,  label: "6 秒" },
+          { value: 8,  label: "8 秒" },
           { value: 10, label: "10 秒" },
+          { value: 12, label: "12 秒" },
+          { value: 15, label: "15 秒" },
+        ] },
+      { key: "generateAudio", label: "生成有声视频",     required: false, secret: false, type: "enum",
+        hint: "2.0 系列支持；开启后自动生成人声/音效/BGM",
+        options: [
+          { value: true,  label: "开（有声）" },
+          { value: false, label: "关（无声）" },
+        ] },
+      { key: "seed",          label: "随机种子",         required: false, secret: false, hint: "-1 为随机；相同 seed 可复现" },
+      { key: "returnLastFrame", label: "返回尾帧图",      required: false, secret: false, type: "enum",
+        hint: "用于串联生成连续视频",
+        options: [
+          { value: false, label: "否" },
+          { value: true,  label: "是" },
         ] },
       { key: "publicBaseUrl", label: "外网回调 Base URL", required: false, secret: false, hint: "图生视频时把 /media/* 暴露给模型侧" },
     ],
@@ -262,14 +296,20 @@ async function downloadUrlToMedia(dir, remoteUrl, fallbackExt) {
   return saveBufferToMedia(dir, buf, ext);
 }
 function need(cond, msg) { if (!cond) throw new Error(msg); }
+function asBool(v, dflt) {
+  if (v === undefined || v === null || v === "") return dflt;
+  if (typeof v === "boolean") return v;
+  return String(v).toLowerCase() === "true";
+}
+// 多模态参考生视频（尾帧+关键帧并存）仅 Seedance 2.0 系列支持。
+function isSeedance20(model) {
+  return /seedance-2-0/i.test(String(model || ""));
+}
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function reqId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
 
 function composeImagePrompt(p) {
   return [p.prompt, p.title, p.sub].filter(Boolean).join(" · ") || "cinematic, high quality";
-}
-function composeVideoPrompt(p, c) {
-  return `${composeImagePrompt(p)} --rt ${c.ratio} --dur ${c.durationS}`;
 }
 
 // ---------- 本地占位 Provider：仅用于无 key 时跑通离线演示 ----------
@@ -353,20 +393,61 @@ class RealProvider {
   }
 
   // ===== 火山方舟 Seedance 视频（异步） =====
+  // 顺序衔接模式相关的 payload 字段：
+  //   payload.refImageUrl   本幕关键帧（画风参考）
+  //   payload.firstFrameUrl 上一幕视频尾帧（用于首帧衔接，仅链路 N>1 幕存在）
+  //   payload.chain         链路任务标记：强制 return_last_frame，产物回传尾帧 URL
   async genVideoSeedance(kind, payload) {
     const c = this.settings.get("ark");
     need(c.apiKey, "火山方舟未配置：请在右上角「⚙ 设置」填入 API Key");
 
-    const content = [{ type: "text", text: composeVideoPrompt(payload, c) }];
-    if (payload.refImageUrl) {
-      const abs = toAbsoluteUrl(payload.refImageUrl, c.publicBaseUrl);
-      content.push({ type: "image_url", image_url: { url: abs } });
+    // Seedance 2.0：ratio/duration/resolution/generate_audio 等均为顶层字段，
+    // text 只放纯画面 prompt（旧写法把 --rt/--dur 拼进 text，2.0 不识别，会污染画面内容）。
+    const promptText = composeImagePrompt(payload);
+    const content = [{ type: "text", text: promptText }];
+
+    const kf = payload.refImageUrl ? toAbsoluteUrl(payload.refImageUrl, c.publicBaseUrl) : null;
+    const prevTail = payload.firstFrameUrl ? toAbsoluteUrl(payload.firstFrameUrl, c.publicBaseUrl) : null;
+    const is20 = isSeedance20(c.model);
+
+    if (prevTail) {
+      // 顺序衔接（N>1 幕）：需同时使用「上一幕尾帧作首帧」+「本幕关键帧参考」。
+      // 官方约束：图生视频-首帧 / 首尾帧 / 多模态参考 三种场景互斥，不可混用 role。
+      // 因此走「多模态参考生视频」（仅 2.0 系列支持）：尾帧 + 关键帧均以 reference_image
+      // 传入，并在提示词中指令模型「以参考图1（上一镜尾帧）作为画面首帧衔接」。
+      if (is20) {
+        content[0].text = `${promptText}\n【镜头衔接】请以参考图1（上一镜头结尾画面）作为本镜头的起始首帧，保证运动与场景自然承接；参考图${kf ? "2" : "1"}为本镜头的画风与主体参考，需严格保持一致的角色形象与色彩风格。`;
+        content.push({ type: "image_url", role: "reference_image", image_url: { url: prevTail } });
+        if (kf) content.push({ type: "image_url", role: "reference_image", image_url: { url: kf } });
+      } else {
+        // 非 2.0 系列不支持多模态参考：降级为「尾帧作首帧」单图（无法并存关键帧）。
+        content[0].text = `${promptText}\n【镜头衔接】画面从提供的首帧自然承接运动，保持前一镜头的画风与主体一致。`;
+        content.push({ type: "image_url", role: "first_frame", image_url: { url: prevTail } });
+      }
+    } else if (kf) {
+      // 首幕或非链路：关键帧作首帧（role 省略默认即 first_frame）。
+      content.push({ type: "image_url", image_url: { url: kf } });
     }
+
+    const dur = Number(c.durationS);
+    const body = {
+      model: c.model,
+      content,
+      ratio: c.ratio || "16:9",
+      resolution: c.resolution || "720p",
+      duration: Number.isFinite(dur) && dur !== 0 ? dur : 5,
+      generate_audio: asBool(c.generateAudio, true),
+      watermark: asBool(c.watermark, false),
+    };
+    const seed = Number(c.seed);
+    if (Number.isFinite(seed) && seed >= 0) body.seed = seed;
+    // 链路任务必须回传尾帧供下一幕衔接；否则遵循用户设置。
+    if (payload.chain || asBool(c.returnLastFrame, false)) body.return_last_frame = true;
 
     const createRes = await fetch(`${c.baseUrl}/contents/generations/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${c.apiKey}` },
-      body: JSON.stringify({ model: c.model, content }),
+      body: JSON.stringify(body),
     });
     if (!createRes.ok) throw new Error(`Seedance 创建任务失败 ${createRes.status}: ${await createRes.text()}`);
     const { id: taskId } = await createRes.json();
@@ -388,11 +469,18 @@ class RealProvider {
         const videoUrl = pj?.content?.video_url || pj?.video_url;
         need(videoUrl, `Seedance 完成但无 video_url: ${JSON.stringify(pj)}`);
         const url = await downloadUrlToMedia(this.dir, videoUrl, ".mp4");
-        return {
+        const out = {
           url, mime: "video/mp4",
-          duration_s: Number(c.durationS) || null,
+          duration_s: Number.isFinite(dur) && dur > 0 ? dur : null,
           has_alpha: kind === "fx",
         };
+        // 尾帧：把远端 last_frame_url 转存到本地 media，供下一幕作首帧与后续留存。
+        const remoteTail = pj?.content?.last_frame_url || pj?.last_frame_url;
+        if (remoteTail) {
+          try { out.lastFrameUrl = await downloadUrlToMedia(this.dir, remoteTail, ".png"); }
+          catch (e) { console.warn("[seedance] 尾帧下载失败:", e.message); }
+        }
+        return out;
       }
     }
   }

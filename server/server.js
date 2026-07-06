@@ -33,10 +33,13 @@ const provider = makeProvider(MEDIA_DIR, settings);
 const queue = makeQueue(dao, provider, { concurrency: Number(process.env.VF_CONCURRENCY || 2) });
 const chat = new ChatService(settings);
 // 队列需要一个「找下一个 queued 任务」的能力（保持 SQL 集中在 server）
+// 顺序衔接（chain=1）任务由 runChain 串行驱动，不进普通并发池，故排除。
 queue.setQueuedFinder(() =>
-  db.prepare(`SELECT * FROM gen_task WHERE status='queued' ORDER BY created_at LIMIT 1`).get() || null);
-// 启动时把历史 running 任务复位为 queued（避免重启后卡死），并拉起队列
-db.prepare(`UPDATE gen_task SET status='queued', progress=0 WHERE status='running'`).run();
+  db.prepare(`SELECT * FROM gen_task WHERE status='queued' AND chain=0 ORDER BY created_at LIMIT 1`).get() || null);
+// 启动时把历史 running 的普通任务复位为 queued（避免重启后卡死），并拉起队列
+db.prepare(`UPDATE gen_task SET status='queued', progress=0 WHERE status='running' AND chain=0`).run();
+// 链路任务重启后无法安全续跑（进程内串行状态已丢失），标记为 failed 供用户重新发起
+db.prepare(`UPDATE gen_task SET status='failed', error='服务重启，顺序衔接链路已中断，请重新发起' WHERE status='running' AND chain=1`).run();
 queue.kick();
 
 // ---------- HTTP 工具 ----------
@@ -306,6 +309,27 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    // POST /gen-chain —— 顺序衔接生成：按 items 顺序串行生成视频，
+    // 把上一幕视频尾帧作为下一幕首帧注入（本幕关键帧参考仍保留）。
+    if (seg[0] === "gen-chain" && !seg[1]) {
+      if (m === "POST") {
+        const { projectId, items = [] } = await readBody(req);
+        if (!projectId) return fail(res, 400, "BAD_REQUEST", "projectId 必填");
+        if (!dao.getProject(projectId)) return fail(res, 404, "NOT_FOUND", "项目不存在");
+        const vids = items.filter((it) => (it.kind || "video") === "video");
+        if (!vids.length) return fail(res, 400, "BAD_REQUEST", "顺序衔接至少需要 1 个 video 任务");
+        // 按传入顺序建链路任务（chain=1，不进普通并发池）
+        const created = vids.map((it) => {
+          const resolved = dao.resolveGenInput("video", it.refId);
+          const t = dao.createTask(projectId, { ...resolved, ...it, kind: "video", chain: true });
+          return dao.rawTask(t.id);
+        });
+        // 串行驱动，后台执行；立即 202 返回任务列表供前端轮询
+        queue.runChain(created).catch((e) => console.error("[gen-chain]", e));
+        return json(res, 202, created.map((r) => dao.getTask(r.id)));
+      }
+    }
+
     // GET /gen-tasks ; POST /gen-tasks
     if (seg[0] === "gen-tasks" && !seg[1]) {
       if (m === "GET") {
@@ -319,7 +343,9 @@ const server = createServer(async (req, res) => {
         if (!projectId) return fail(res, 400, "BAD_REQUEST", "projectId 必填");
         if (!dao.getProject(projectId)) return fail(res, 404, "NOT_FOUND", "项目不存在");
         const created = items.map((it) => {
-          const t = dao.createTask(projectId, it);
+          // 回填该幕/角色已存的 prompt 与参考图（显式传入的字段优先）
+          const resolved = dao.resolveGenInput(it.kind, it.refId);
+          const t = dao.createTask(projectId, { ...resolved, ...it });
           queue.submit(dao.rawTask(t.id));
           return t;
         });

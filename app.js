@@ -79,7 +79,7 @@ function renderTopbar() {
 
   const actions = STATE.project ? {
     brief: ``,
-    script: `<button class="btn btn-ghost btn-sm" data-act="asset">${ICON.asset}素材库</button><button class="btn btn-primary btn-sm" data-act="genAll">${ICON.spark}一键生成全部</button>`,
+    script: `<button class="btn btn-ghost btn-sm" data-act="asset">${ICON.asset}素材库</button><button class="btn btn-ghost btn-sm" data-act="genChain" title="按幕序串行生成：以上一幕视频尾帧作为下一幕首帧衔接，本幕关键帧参考仍保留（仅 Seedance 2.0 系列，较慢）">${ICON.spark}顺序衔接生成</button><button class="btn btn-primary btn-sm" data-act="genAll">${ICON.spark}一键生成全部</button>`,
     gen: `<button class="btn btn-ghost btn-sm" data-act="asset">${ICON.asset}素材库</button><button class="btn btn-sm" data-act="toEditor">前往剪辑 →</button>`,
     editor: `<button class="btn btn-sm" data-act="export">导出剪辑清单</button>`,
   }[CURRENT] : "";
@@ -92,6 +92,7 @@ function renderTopbar() {
 async function handleAct(act) {
   if (act === "asset") openDrawer();
   else if (act === "genAll") await submitAll();
+  else if (act === "genChain") await submitChain();
   else if (act === "toEditor") go("editor");
   else if (act === "export") await exportFilm();
   else if (act === "settings") openSettings();
@@ -165,6 +166,34 @@ async function ensureProject() {
   }
   API.setPid(target.id);
   STATE.project = await API.getProject();
+}
+
+/* 顺序衔接生成：按幕序串行生成视频，上一幕尾帧作下一幕首帧衔接 */
+async function submitChain() {
+  try {
+    if (!STATE.script) STATE.script = await API.getScript();
+    const scenes = (STATE.script?.scenes || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    if (!scenes.length) {
+      toast("脚本尚未生成，请先在需求对话页生成脚本");
+      return;
+    }
+    // 关键帧是衔接的画风锚点：首幕以关键帧作首帧，后续幕关键帧仍作参考。缺失则提示先生成。
+    const missing = scenes.filter(s => !s.kf).map(s => `幕${s.order}`);
+    if (missing.length) {
+      const ok = await dlgConfirm({
+        title: "部分关键帧缺失",
+        message: `${missing.join("、")} 尚无关键帧。顺序衔接依赖关键帧锚定画风，建议先「一键生成全部」产出关键帧。是否仍继续（缺失幕将仅靠上一幕尾帧与提示词衔接）？`,
+        primaryText: "仍然继续",
+      });
+      if (!ok) return;
+    }
+    const items = scenes.map(s => ({ kind: "video", refId: s.id }));
+    await API.submitChain(items);
+    go("gen");
+    toast(`已提交 ${items.length} 幕顺序衔接任务，将按幕序串行生成`);
+  } catch (e) {
+    toast("提交失败：" + (e.message || "网络错误"));
+  }
 }
 
 /* 一键生成全部：按脚本各幕汇总素材项，提交生成任务 */

@@ -154,6 +154,7 @@ const API = (() => {
       streamSSE(`/projects/${PID()}/dialogue`, { text }, { onToken, onBrief }),
 
     submitGen: (items) => http("POST", `/gen-tasks`, { projectId: PID(), items }),
+    submitChain: (items) => http("POST", `/gen-chain`, { projectId: PID(), items }),
     pollTask: (id) => http("GET", `/gen-tasks/${id}`),
     retryTask: (id) => http("POST", `/gen-tasks/${id}:retry`),
     cancelTask: (id) => http("POST", `/gen-tasks/${id}:cancel`),

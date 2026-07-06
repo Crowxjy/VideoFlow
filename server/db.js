@@ -113,6 +113,7 @@ function migrate(db) {
     progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
     thumb TEXT, ref_id TEXT, media_id TEXT, error TEXT,
     model TEXT, prompt TEXT, ref_image_url TEXT, webhook TEXT,
+    first_frame_url TEXT, last_frame_url TEXT, chain INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS timeline (
@@ -131,6 +132,10 @@ function migrate(db) {
   ensureColumn(db, "generic_asset", "mime",       "TEXT");
   ensureColumn(db, "generic_asset", "size",       "INTEGER");
   ensureColumn(db, "generic_asset", "created_at", "TEXT NOT NULL DEFAULT ''");
+  // 顺序衔接模式：链路首帧（上一幕尾帧）入参、本幕产出的尾帧 URL、链路标记。
+  ensureColumn(db, "gen_task", "first_frame_url", "TEXT");
+  ensureColumn(db, "gen_task", "last_frame_url",  "TEXT");
+  ensureColumn(db, "gen_task", "chain",           "INTEGER NOT NULL DEFAULT 0");
 }
 
 function ensureColumn(db, table, col, decl) {
@@ -211,7 +216,8 @@ export function makeDao(db) {
   };
 
   const taskRow = (t) => ({ id: t.id, projectId: t.project_id, kind: t.kind, title: t.title, sub: t.sub,
-    status: t.status, progress: t.progress, thumb: t.thumb, refId: t.ref_id, mediaId: t.media_id, error: t.error });
+    status: t.status, progress: t.progress, thumb: t.thumb, refId: t.ref_id, mediaId: t.media_id, error: t.error,
+    firstFrameUrl: t.first_frame_url || null, lastFrameUrl: t.last_frame_url || null, chain: !!t.chain });
 
   const getTasks = (pid, status) => {
     const rows = status
@@ -401,18 +407,43 @@ export function makeDao(db) {
     return rows.map(r => ({ key: r.pkey, kind: r.kind, label: r.label, hint: r.hint || "", text: r.text, version: r.version }));
   };
 
+  // 提交生成任务时，按 (kind, refId) 回填该幕/角色已存的 prompt 与参考图。
+  // - video/keyframe: refId=scene_node.id，prompt 取该幕 kf，参考图取该幕已挂的关键帧(scene_node.kf)
+  // - fx:            refId=scene_node.id，prompt 取该幕 fx
+  // - char_ref:      refId=character.id，prompt 取任一幕中 pkey=char_<refId>，参考图取角色 img
+  const resolveGenInput = (kind, refId) => {
+    if (!refId) return {};
+    if (kind === "video" || kind === "keyframe") {
+      const p = q(`SELECT text FROM prompt WHERE scene_node_id=? AND pkey='kf'`).get(refId);
+      const node = q(`SELECT kf FROM scene_node WHERE id=?`).get(refId);
+      return { prompt: p?.text || null, refImageUrl: (kind === "video" ? node?.kf : null) || null };
+    }
+    if (kind === "fx") {
+      const p = q(`SELECT text FROM prompt WHERE scene_node_id=? AND pkey='fx'`).get(refId);
+      const node = q(`SELECT kf FROM scene_node WHERE id=?`).get(refId);
+      return { prompt: p?.text || null, refImageUrl: node?.kf || null };
+    }
+    if (kind === "char_ref") {
+      const p = q(`SELECT text FROM prompt WHERE pkey=? LIMIT 1`).get(`char_${refId}`);
+      const ch = q(`SELECT img FROM character WHERE id=?`).get(refId);
+      return { prompt: p?.text || null, refImageUrl: ch?.img || null };
+    }
+    return {};
+  };
+
   const lockCharacter = (id) => {
     q(`UPDATE character SET locked=1, version=version+1 WHERE id=?`).run(id);
     return q(`SELECT * FROM character WHERE id=?`).get(id);
   };
 
-  const createTask = (pid, { kind, refId, model, prompt, refImageUrl, webhook }) => {
+  const createTask = (pid, { kind, refId, model, prompt, refImageUrl, firstFrameUrl, webhook, chain }) => {
     const id = uid("g_"), t = now();
     const titleMap = { char_ref: "角色参考图", keyframe: "关键帧", fx: "动效", video: "视频片段", voice: "配音", bgm: "配乐" };
-    q(`INSERT INTO gen_task(id,project_id,kind,title,sub,status,progress,ref_id,model,prompt,ref_image_url,webhook,created_at,updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    q(`INSERT INTO gen_task(id,project_id,kind,title,sub,status,progress,ref_id,model,prompt,ref_image_url,first_frame_url,chain,webhook,created_at,updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(id, pid, kind, `${titleMap[kind] || kind} 任务`, `${kind} · 已提交`, "queued", 0,
-        refId || null, model || null, prompt || null, refImageUrl || null, webhook || null, t, t);
+        refId || null, model || null, prompt || null, refImageUrl || null, firstFrameUrl || null,
+        chain ? 1 : 0, webhook || null, t, t);
     return getTask(id);
   };
 
@@ -487,7 +518,7 @@ export function makeDao(db) {
 
   return {
     getProject, getBrief, getDialogue, getScript, getCharacters, getScenes, getGeneric,
-    getTasks, getTask, getTimeline, addDialogue, upsertPrompt, getPrompts, lockCharacter,
+    getTasks, getTask, getTimeline, addDialogue, upsertPrompt, getPrompts, resolveGenInput, lockCharacter,
     createTask, updateTask, rawTask, addMedia, attachKeyframe, setCharacterImg, ingestMedia,
     createExport, touchProjectStatus,
     upsertBriefPatch, tagLastUserMessage,
