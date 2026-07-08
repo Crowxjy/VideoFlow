@@ -147,6 +147,7 @@ export function makeClient({ base, token, projectId } = {}) {
 
     // 生成任务
     submitGen: (items) => http("POST", "/gen-tasks", { projectId: pidOrThrow(), items }),
+    submitChain: (items) => http("POST", "/gen-chain", { projectId: pidOrThrow(), items }),
     listTasks: (status) =>
       http("GET", `/gen-tasks?projectId=${pidOrThrow()}${status ? "&status=" + status : ""}`),
     pollTask: (id) => http("GET", `/gen-tasks/${id}`),

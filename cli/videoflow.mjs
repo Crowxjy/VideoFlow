@@ -126,6 +126,8 @@ const HELP = `videoflow ${PKG.version} — VideoFlow CLI
 
   gen submit                    按当前脚本提交生成任务 (自动跳过已交付/未就绪通道)
                                 [--kinds=keyframe,voice 白名单] [--force 不跳过未就绪通道]
+  gen chain                     顺序衔接生成: 按幕序串行生成视频, 上一幕尾帧作下一幕首帧
+                                (本幕关键帧仍作参考; 需 ark 通道 + Seedance 2.0 系列) [--force]
   gen plan                      输出每幕可生成的媒体清单+prompt+通道就绪度，交宿主 Agent 自产
   gen ingest --from=<manifest>  把宿主 Agent 产出的媒体文件上传并绑定到分镜/角色
   gen tasks [--status=done]     列出生成任务
@@ -576,6 +578,27 @@ async function genCmd(sub, args) {
         () => {
           console.log(`✓ 交付 ${okN} 项，失败 ${results.length - okN} 项`);
           results.filter(r => !r.ok).forEach(r => console.log(`  ✗ ${r.kind} ${r.refId || ""}: ${r.error}`));
+        });
+    return;
+  }
+  // gen chain: 顺序衔接生成——按幕序串行生成视频，上一幕视频尾帧作下一幕首帧（本幕关键帧仍作参考）
+  // 依赖后端 ark 通道 + Seedance 2.0 系列模型（多模态参考生视频）。
+  if (sub === "chain") {
+    const script = await client.getScript();
+    if (!script?.scenes?.length) return fail("脚本尚未生成，先 `videoflow script generate` 或 `videoflow script apply`", 1);
+    const readiness = kindReadiness((await client.health()).channelStatus);
+    if (!readiness.video?.ready && !flags.force) {
+      return fail(`视频通道(${readiness.video?.channel || "ark"})未就绪；配置火山方舟后重试，或加 --force 强行提交`, 1);
+    }
+    // 按幕序排序，逐幕提交为链路任务
+    const scenes = (script.scenes || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    const items = scenes.map(s => ({ kind: "video", refId: s.id }));
+    const r = await client.submitChain(items);
+    const created = Array.isArray(r) ? r : (r.items || r.created || []);
+    out({ submitted: items.length, mode: "gen.chain", created },
+        () => {
+          console.log(`✓ 已提交 ${items.length} 幕顺序衔接任务（串行生成，首帧衔接）`);
+          console.log(`  用 \`videoflow gen tasks --json\` 轮询进度`);
         });
     return;
   }
