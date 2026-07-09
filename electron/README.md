@@ -12,11 +12,16 @@ Electron 主进程 (electron/main.js)
   │    · --experimental-sqlite   → node:sqlite 需要此标志
   │    · VF_MEDIA_DIR / VF_DATA_DIR → 指向用户可写目录
   │      (~/Library/Application Support/VideoFlow/)
+  ├─ 后台自动起 cloudflared 隧道 (electron/tunnel.js)
+  │    · 首次运行自动下载 cloudflared 到用户目录 bin/
+  │    · 起临时隧道 → 抓取 https://xxx.trycloudflare.com
+  │    · 自动 PUT 写入 ark.publicBaseUrl（供图生视频/顺序衔接）
   └─ 开窗口 → http://127.0.0.1:<port>/  （前端同源自动连后端）
 ```
 
 - 前端 `api.js` 已支持同源解析：窗口加载 `http://127.0.0.1:<port>/` 后会自动把后端定位到 `<origin>/v1`，无需改前端。
 - `server.js` 的产物/数据目录已支持 `VF_MEDIA_DIR` / `VF_DATA_DIR` 覆盖；本地开发不设这两个变量时行为不变（仍写仓库内 `media/`、`data/`）。
+- **隧道全自动**：图生视频需把本机 `/media/*` 暴露成公网 URL。桌面版启动后台自动配置 cloudflared 并填好 `publicBaseUrl`，用户无需敲命令、无需 Cloudflare 账号。隧道失败不阻断应用，仅图生视频不可用（文生视频照常）。
 
 ## 前置要求
 
@@ -66,5 +71,6 @@ npm run dist
 
 ## 已知限制
 
-- 视频「顺序衔接」/图生视频需要把本机关键帧暴露成公网可达 URL（`publicBaseUrl`）。桌面版同样要用户自行开隧道（如 cloudflared）并在设置里填该地址——这与网页/本地运行时一致。
+- 图生视频/顺序衔接的公网隧道由桌面版**自动配置**（见上文架构）。首次运行会下载 cloudflared（~30MB，需联网，仅一次）。使用的是 Cloudflare 免费临时隧道（trycloudflare），无 uptime 保证、URL 每次启动会变（程序自动重新填），偶发不稳定属正常；如需生产级稳定，可改用 Cloudflare named tunnel（需账号）。
+- 非桌面版（直接 `node server/server.js`）仍需手动在设置里填 `publicBaseUrl`，或自行开隧道。
 - `node:sqlite` 目前是 Node 实验特性，启动带 `--experimental-sqlite`，会有一条 ExperimentalWarning，属正常。

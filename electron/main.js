@@ -16,6 +16,7 @@ import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
+import { ensureCloudflared, startTunnel } from "./tunnel.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");           // 打包后为 resources/app（只读）
@@ -28,6 +29,28 @@ app.disableHardwareAcceleration();
 
 let serverProc = null;
 let mainWindow = null;
+let tunnel = null;
+
+// 起隧道并把公网地址写进后端 settings（ark.publicBaseUrl），供图生视频/顺序衔接使用。
+// 全程失败不阻断应用启动——文生视频仍可用，仅图生视频会提示需要公网地址。
+async function setupTunnel(port, userDataDir) {
+  try {
+    const binDir = join(userDataDir, "bin");
+    const binPath = await ensureCloudflared(binDir, (m) => console.log(`[tunnel] ${m}`));
+    tunnel = await startTunnel(binPath, port, { log: (m) => console.log(m) });
+    console.log(`[tunnel] 公网地址就绪：${tunnel.url}`);
+    // 通过本地 API 写入 settings，复用现成持久化逻辑
+    const r = await fetch(`http://127.0.0.1:${port}/v1/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ark: { publicBaseUrl: tunnel.url } }),
+    });
+    if (!r.ok) console.warn(`[tunnel] 写入 publicBaseUrl 失败：HTTP ${r.status}`);
+    else console.log("[tunnel] 已自动填入 ark.publicBaseUrl");
+  } catch (e) {
+    console.warn(`[tunnel] 隧道自动配置失败（图生视频将不可用，文生视频不受影响）：${e.message}`);
+  }
+}
 
 // 找一个空闲端口（让系统随机分配，避免与用户其它服务冲突）
 function findFreePort() {
@@ -118,6 +141,8 @@ app.whenReady().then(async () => {
       return;
     }
     createWindow(port);
+    // 隧道在后台异步配置：窗口立即可用，隧道就绪后自动填入 settings（不阻塞 UI）
+    setupTunnel(port, userDataDir);
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow(port);
@@ -130,7 +155,8 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => { app.isQuitting = true; });
 app.on("window-all-closed", () => {
+  if (tunnel) { try { tunnel.stop(); } catch {} }
   if (serverProc) { try { serverProc.kill(); } catch {} }
   if (process.platform !== "darwin") app.quit();
-  else app.quit();  // 桌面版：关窗即退（含后端），避免残留后台进程
+  else app.quit();  // 桌面版：关窗即退（含后端与隧道），避免残留后台进程
 });

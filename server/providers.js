@@ -138,7 +138,7 @@ const SETTINGS_SCHEMA = {
           { value: false, label: "否" },
           { value: true,  label: "是" },
         ] },
-      { key: "publicBaseUrl", label: "外网回调 Base URL", required: false, secret: false, hint: "图生视频时把 /media/* 暴露给模型侧" },
+      { key: "publicBaseUrl", label: "外网回调 Base URL", required: false, secret: false, hint: "图生视频时把 /media/* 暴露给模型侧；桌面版启动后会自动填入 cloudflared 隧道地址，一般无需手动改" },
     ],
   },
   volcTts: {
