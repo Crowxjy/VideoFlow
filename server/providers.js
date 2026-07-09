@@ -376,10 +376,12 @@ class RealProvider {
   async genImageOpenAI(kind, payload) {
     const c = this.settings.get("openai");
     need(c.apiKey, "OpenAI 未配置：请在右上角「⚙ 设置」填入 API Key");
+    // 尺寸：逐素材优先（payload.size），否则回退全局默认。
+    const size = payload.size || c.size;
     const r = await fetch(`${c.baseUrl}/images/generations`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${c.apiKey}` },
-      body: JSON.stringify({ model: c.model, prompt: composeImagePrompt(payload), size: c.size, n: 1 }),
+      body: JSON.stringify({ model: c.model, prompt: composeImagePrompt(payload), size, n: 1 }),
     });
     if (!r.ok) throw new Error(`OpenAI 图像生成失败 ${r.status}: ${await r.text()}`);
     const j = await r.json();
@@ -388,7 +390,7 @@ class RealProvider {
     if (item.b64_json) url = await saveBufferToMedia(this.dir, Buffer.from(item.b64_json, "base64"), ".png");
     else if (item.url) url = await downloadUrlToMedia(this.dir, item.url, ".png");
     else throw new Error("OpenAI 图像生成响应无 b64_json/url 字段");
-    const [w, h] = String(c.size || "1536x1024").split("x").map(Number);
+    const [w, h] = String(size || "1536x1024").split("x").map(Number);
     return { url, mime: "image/png", width: w, height: h };
   }
 
@@ -429,12 +431,13 @@ class RealProvider {
       content.push({ type: "image_url", image_url: { url: kf } });
     }
 
-    const dur = Number(c.durationS);
+    // 逐素材优先：payload.durationS/ratio/resolution 覆盖全局默认，空则回退。
+    const dur = Number(payload.durationS != null && payload.durationS !== "" ? payload.durationS : c.durationS);
     const body = {
       model: c.model,
       content,
-      ratio: c.ratio || "16:9",
-      resolution: c.resolution || "720p",
+      ratio: payload.ratio || c.ratio || "16:9",
+      resolution: payload.resolution || c.resolution || "720p",
       duration: Number.isFinite(dur) && dur !== 0 ? dur : 5,
       generate_audio: asBool(c.generateAudio, true),
       watermark: asBool(c.watermark, false),

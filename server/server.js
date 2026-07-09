@@ -322,6 +322,20 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    // /scenes/{id}/params (GET / PATCH) —— 逐镜的图片尺寸 / 视频比例·分辨率·时长
+    if (seg[0] === "scenes" && seg[1] && seg[2] === "params") {
+      if (m === "GET") return json(res, 200, dao.getSceneParams(seg[1]) || {});
+      if (m === "PATCH") {
+        const body = (await readBody(req)) || {};
+        const saved = dao.updateSceneParams(seg[1], {
+          imgSize: body.imgSize, videoRatio: body.videoRatio,
+          videoResolution: body.videoResolution, videoDurationS: body.videoDurationS,
+        });
+        if (!saved) return fail(res, 404, "NOT_FOUND", "分镜不存在");
+        return json(res, 200, saved);
+      }
+    }
+
     // DELETE /generic-assets/{id}
     if (seg[0] === "generic-assets" && seg[1] && m === "DELETE") {
       const row = dao.deleteGenericAsset(seg[1]);

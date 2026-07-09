@@ -95,6 +95,17 @@ videoflow script apply --from=<script.json> --json    # → 落库并返回 { sc
 ```
 （没有自带 LLM 时，退回 `videoflow script generate --json`，需后端 chat 通道 ready。）
 
+> **逐镜参数（可选）**：每一幕可单独覆盖图片尺寸 / 视频画幅比例·分辨率·时长，未设则回退全局设置默认。
+> 在脚本 JSON 的某幕里带 `params` 即可随 `script apply` 一起落库；也可事后单独设置：
+> ```jsonc
+> // 某幕节点：留空字段表示跟随全局默认
+> { "id": "sn_xxx", "title": "开场", "params": {
+>     "imgSize": "1024x1792", "videoRatio": "9:16",
+>     "videoResolution": "1080p", "videoDurationS": 8 } }
+> ```
+> 单独读写：`GET /scenes/{id}/params`、`PATCH /scenes/{id}/params`（空串=恢复默认，仅传的字段才改）。
+> 生成时后端按 `(kind, refId)` 自动注入到对应任务：keyframe 用 `imgSize`；video/fx 用比例·分辨率·时长。
+
 ### 2.3 媒体（图/配音/视频，能做的你做，其余后端兜底）
 ```bash
 videoflow gen plan --json

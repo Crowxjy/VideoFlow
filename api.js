@@ -161,6 +161,9 @@ const API = (() => {
     lockCharacter: (id) => http("POST", `/characters/${id}:lock`),
     getPrompts: (sceneNodeId) => http("GET", `/scenes/${sceneNodeId}/prompts`),
     savePrompts: (sceneNodeId, prompts) => http("PUT", `/scenes/${sceneNodeId}/prompts`, prompts),
+    // 逐镜参数：{ imgSize, videoRatio, videoResolution, videoDurationS }
+    getSceneParams: (sceneNodeId) => http("GET", `/scenes/${sceneNodeId}/params`),
+    saveSceneParams: (sceneNodeId, params) => http("PATCH", `/scenes/${sceneNodeId}/params`, params),
     exportFilm: () => http("POST", `/projects/${PID()}/export`),
 
     // ---- 通用素材上传/删除 ----

@@ -65,6 +65,9 @@ export function makeQueue(dao, provider, { concurrency = 2 } = {}) {
         title: task.title, sub: task.sub, kind: task.kind, prompt: task.prompt,
         refImageUrl: task.ref_image_url, firstFrameUrl: task.first_frame_url,
         model: task.model, refId: task.ref_id, chain,
+        // 逐素材参数（空则 provider 回退全局 settings 默认值）
+        size: task.size, ratio: task.ratio, resolution: task.resolution,
+        durationS: task.duration_s,
       };
       const out = await provider.generate(task.kind, payload);
       const mediaId = dao.addMedia(task.project_id, { kind: task.kind, task_id: task.id, ...out });

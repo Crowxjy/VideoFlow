@@ -361,6 +361,24 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 }
 .scene-actions { display: flex; gap: 6px; border-top: 1px solid var(--line-soft); padding-top: 10px; }
 .scene-actions .btn-spacer { margin-left: auto; }
+/* 逐镜参数摘要行 */
+.scene-param-row { margin: 2px 0 2px; }
+.scene-params-sum { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px;
+  font-family: var(--ff-mono); color: var(--txt-2); background: var(--bg-2);
+  border-radius: 6px; padding: 3px 8px; box-shadow: inset 0 0 0 1px var(--line-soft); }
+.scene-params-sum.muted { color: var(--txt-3); }
+.scene-params-sum svg { width: 12px; height: 12px; }
+/* 逐镜参数抽屉表单 */
+.sp-group { margin-top: 4px; padding: 12px 14px; border-radius: 10px; background: var(--bg-2);
+  box-shadow: inset 0 0 0 1px var(--line-soft); }
+.sp-group + .sp-group { margin-top: 12px; }
+.sp-group-title { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600;
+  color: var(--txt-1); margin-bottom: 10px; }
+.sp-group-title svg { width: 14px; height: 14px; }
+.sp-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; }
+.sp-field + .sp-field { border-top: 1px solid var(--line-soft); }
+.sp-field > span { font-size: 12.5px; color: var(--txt-2); flex: 0 0 auto; }
+.sp-sel { flex: 1 1 auto; max-width: 60%; }
 .scene-add {
   border: 1px dashed var(--line); border-radius: var(--radius-lg);
   display: grid; place-items: center; color: var(--txt-3); min-height: 220px; gap: 8px;

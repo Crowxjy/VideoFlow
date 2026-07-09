@@ -34,6 +34,46 @@ const STEPS = [
 ];
 
 let CURRENT = "brief";
+
+// 逐镜参数可选项（与后端 SETTINGS_SCHEMA 对齐）；空值表示「跟随全局默认」。
+const SCENE_PARAM_OPTS = {
+  imgSize: [
+    { value: "", label: "跟随全局默认" },
+    { value: "1024x1024", label: "1024×1024（方形）" },
+    { value: "1024x1536", label: "1024×1536（竖 2:3）" },
+    { value: "1536x1024", label: "1536×1024（横 3:2）" },
+    { value: "1792x1024", label: "1792×1024（横 16:9）" },
+    { value: "1024x1792", label: "1024×1792（竖 9:16）" },
+  ],
+  videoRatio: [
+    { value: "", label: "跟随全局默认" },
+    { value: "adaptive", label: "adaptive（自适应）" },
+    { value: "16:9", label: "16:9（横屏宽）" },
+    { value: "9:16", label: "9:16（竖屏）" },
+    { value: "1:1", label: "1:1（方形）" },
+    { value: "4:3", label: "4:3" },
+    { value: "3:4", label: "3:4" },
+    { value: "21:9", label: "21:9（电影超宽）" },
+  ],
+  videoResolution: [
+    { value: "", label: "跟随全局默认" },
+    { value: "480p", label: "480p" },
+    { value: "720p", label: "720p" },
+    { value: "1080p", label: "1080p（fast 版不支持）" },
+  ],
+  videoDurationS: [
+    { value: "", label: "跟随全局默认" },
+    { value: "-1", label: "-1（模型自动）" },
+    { value: "4", label: "4 秒" },
+    { value: "5", label: "5 秒" },
+    { value: "6", label: "6 秒" },
+    { value: "8", label: "8 秒" },
+    { value: "10", label: "10 秒" },
+    { value: "12", label: "12 秒" },
+    { value: "15", label: "15 秒" },
+  ],
+};
+
 // 应用运行时状态（取代旧的 window.DB）
 const STATE = {
   projects: [],     // 项目列表
@@ -494,6 +534,17 @@ function sceneCard(s) {
   const chars = (s.chars || []).length
     ? s.chars.map(c => `<span class="ref-link" data-ref="char">${escapeHtml(c.name)}</span>`).join("、")
     : `<span class="muted">无角色</span>`;
+  // 逐镜参数摘要：有覆盖则显示具体值，否则「默认」。
+  const P = s.params || {};
+  const paramBits = [
+    P.imgSize ? `图 ${P.imgSize}` : null,
+    P.videoRatio ? `比例 ${P.videoRatio}` : null,
+    P.videoResolution ? P.videoResolution : null,
+    (P.videoDurationS != null) ? `${P.videoDurationS === -1 ? "自动" : P.videoDurationS + "s"}` : null,
+  ].filter(Boolean);
+  const paramSummary = paramBits.length
+    ? `<span class="scene-params-sum" title="本幕自定义参数">${ICON.gear}${escapeHtml(paramBits.join(" · "))}</span>`
+    : `<span class="scene-params-sum muted" title="本幕使用全局默认参数">${ICON.gear}参数：默认</span>`;
   el.innerHTML = `
     <div class="kf ${s.kfState === "generating" ? "gen" : ""}">
       <span class="scene-idx">幕 ${s.order}</span>
@@ -505,7 +556,9 @@ function sceneCard(s) {
       <div class="scene-row">${ICON.scene}场景：<span class="ref-link" data-ref="scene">${escapeHtml(s.sceneRef || "—")}</span></div>
       <div class="scene-row">${ICON.user}角色：${chars}</div>
       <div class="scene-narr">${escapeHtml(s.narration || "")}</div>
+      <div class="scene-param-row">${paramSummary}</div>
       <div class="scene-actions">
+        <button class="btn btn-ghost btn-sm" data-params="${s.id}" title="设置本幕图片尺寸 / 视频比例·分辨率·时长">${ICON.gear}参数</button>
         <button class="btn btn-ghost btn-sm" data-prompt="${s.id}">${ICON.pen}编辑 Prompt</button>
         <button class="btn btn-sm btn-spacer" data-gen="${s.id}">${ICON.play}生成片段</button>
       </div>
@@ -513,6 +566,7 @@ function sceneCard(s) {
   el.querySelectorAll(".ref-link").forEach(r => r.onclick = () => openDrawer(r.dataset.ref === "char" ? "char" : "scene"));
   const kfEl = el.querySelector(".kf-preview");
   if (kfEl) kfEl.onclick = () => openPreview(kfEl.dataset.preview, kfEl.dataset.mime);
+  el.querySelector(`[data-params]`).onclick = () => openSceneParams(s);
   el.querySelector(`[data-prompt]`).onclick = () => openPromptEditor(s);
   el.querySelector(`[data-gen]`).onclick = async () => {
     try {
@@ -521,6 +575,60 @@ function sceneCard(s) {
     } catch (e) { toast("提交失败：" + (e.message || "网络错误")); }
   };
   return el;
+}
+
+/* ---- 逐镜参数抽屉：图片尺寸（关键帧）+ 视频比例/分辨率/时长 ---- */
+function openSceneParams(s) {
+  const d = document.getElementById("drawer"), scrim = document.getElementById("drawerScrim");
+  d.classList.add("show"); scrim.classList.add("show"); d.setAttribute("aria-hidden", "false");
+  const P = s.params || {};
+  const sel = (key, cur) => {
+    const opts = SCENE_PARAM_OPTS[key].map(o =>
+      `<option value="${o.value}"${String(cur ?? "") === String(o.value) ? " selected" : ""}>${escapeHtml(o.label)}</option>`).join("");
+    return `<select class="sp-sel" data-sp="${key}">${opts}</select>`;
+  };
+  d.innerHTML = `
+    <div class="drawer-head">
+      <h3>本幕参数 · 幕${s.order}「${escapeHtml(s.title || "")}」</h3>
+      <button class="icon-btn icon-btn-sm" id="drawerClose">${ICON.close}</button>
+    </div>
+    <div class="drawer-body">
+      <div class="pe-tip">仅对本幕生效，留「跟随全局默认」则使用右上角设置里的全局参数。修改后对之后发起的生成任务生效。</div>
+      <div class="sp-group">
+        <div class="sp-group-title">${ICON.img} 关键帧图片</div>
+        <label class="sp-field"><span>图片尺寸</span>${sel("imgSize", P.imgSize)}</label>
+      </div>
+      <div class="sp-group">
+        <div class="sp-group-title">${ICON.gen} 视频片段</div>
+        <label class="sp-field"><span>画幅比例</span>${sel("videoRatio", P.videoRatio)}</label>
+        <label class="sp-field"><span>分辨率</span>${sel("videoResolution", P.videoResolution)}</label>
+        <label class="sp-field"><span>时长</span>${sel("videoDurationS", P.videoDurationS)}</label>
+      </div>
+    </div>
+    <div class="drawer-foot">
+      <button class="btn btn-ghost" id="spClose2">取消</button>
+      <button class="btn btn-primary" id="spSave">${ICON.spark}保存参数</button>
+    </div>`;
+  d.querySelector("#drawerClose").onclick = closeDrawer;
+  d.querySelector("#spClose2").onclick = closeDrawer;
+  d.querySelector("#spSave").onclick = async () => {
+    const val = (k) => d.querySelector(`select[data-sp="${k}"]`).value;
+    const payload = {
+      imgSize: val("imgSize"),
+      videoRatio: val("videoRatio"),
+      videoResolution: val("videoResolution"),
+      videoDurationS: val("videoDurationS"),  // "" | "-1" | "4" ... 后端归一化
+    };
+    try {
+      const saved = await API.saveSceneParams(s.id, payload);
+      // 同步内存态并重渲染故事板，刷新参数摘要
+      const node = (STATE.script?.scenes || []).find(x => x.id === s.id);
+      if (node) node.params = saved;
+      closeDrawer();
+      if (CURRENT === "script") go("script");
+      toast(`幕${s.order} 参数已保存`);
+    } catch (e) { toast("保存失败：" + (e.message || "网络错误")); }
+  };
 }
 
 /* ---- Prompt 编辑抽屉（数据源：后端 prompt 表，由 LLM 在脚本生成时落入） ---- */

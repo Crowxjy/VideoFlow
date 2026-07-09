@@ -136,6 +136,22 @@ function migrate(db) {
   ensureColumn(db, "gen_task", "first_frame_url", "TEXT");
   ensureColumn(db, "gen_task", "last_frame_url",  "TEXT");
   ensureColumn(db, "gen_task", "chain",           "INTEGER NOT NULL DEFAULT 0");
+  // 逐素材参数：单个任务可覆盖全局默认（空则回退全局 settings）。
+  //   size       图片尺寸（keyframe/char_ref），如 "1536x1024"
+  //   ratio      视频画幅比例（video/fx），如 "16:9"
+  //   resolution 视频分辨率（video/fx），如 "720p"
+  //   duration_s 视频时长秒（video/fx），-1 表示模型自动
+  ensureColumn(db, "gen_task", "size",        "TEXT");
+  ensureColumn(db, "gen_task", "ratio",       "TEXT");
+  ensureColumn(db, "gen_task", "resolution",  "TEXT");
+  ensureColumn(db, "gen_task", "duration_s",  "INTEGER");
+  // 逐镜参数：存在分镜节点上，生成时由 resolveGenInput 注入到对应任务。
+  //   img_size            该幕关键帧图片尺寸
+  //   video_ratio/…       该幕视频画幅/分辨率/时长
+  ensureColumn(db, "scene_node", "img_size",           "TEXT");
+  ensureColumn(db, "scene_node", "video_ratio",        "TEXT");
+  ensureColumn(db, "scene_node", "video_resolution",   "TEXT");
+  ensureColumn(db, "scene_node", "video_duration_s",   "INTEGER");
 }
 
 function ensureColumn(db, table, col, decl) {
@@ -180,7 +196,10 @@ export function makeDao(db) {
       return { id: n.id, order: n.ord, title: n.title, goal: n.goal,
         sceneRef: n.scene_ref, sceneRefId: n.scene_ref_id, chars,
         fx: { need: !!n.fx_need, type: n.fx_type, intensity: n.fx_intensity },
-        narration: n.narration, kfState: n.kf_state, kf: n.kf };
+        narration: n.narration, kfState: n.kf_state, kf: n.kf,
+        params: { imgSize: n.img_size || null, videoRatio: n.video_ratio || null,
+          videoResolution: n.video_resolution || null,
+          videoDurationS: n.video_duration_s == null ? null : n.video_duration_s } };
     });
     return { projectId: pid, global: { scenes: g.total_scenes, duration_s: g.duration_s, style: g.style, bgm: g.bgm, narration: g.narration }, scenes };
   };
@@ -394,6 +413,13 @@ export function makeDao(db) {
         const hint = pkey === "fx" ? `强度 ${fx.intensity || "中"}` : "";
         insPrompt.run(id, pkey, kind, label, hint, text.trim());
       }
+      // 逐镜参数：Agent/前端可在脚本 JSON 里带 params 直接落库（与 getScript 对称）
+      if (n.params && typeof n.params === "object") {
+        updateSceneParams(id, {
+          imgSize: n.params.imgSize, videoRatio: n.params.videoRatio,
+          videoResolution: n.params.videoResolution, videoDurationS: n.params.videoDurationS,
+        });
+      }
       n.id = id;
     });
 
@@ -425,13 +451,26 @@ export function makeDao(db) {
     if (!refId) return {};
     if (kind === "video" || kind === "keyframe") {
       const p = q(`SELECT text FROM prompt WHERE scene_node_id=? AND pkey='kf'`).get(refId);
-      const node = q(`SELECT kf FROM scene_node WHERE id=?`).get(refId);
-      return { prompt: p?.text || null, refImageUrl: (kind === "video" ? node?.kf : null) || null };
+      const node = q(`SELECT kf,img_size,video_ratio,video_resolution,video_duration_s FROM scene_node WHERE id=?`).get(refId);
+      const base = { prompt: p?.text || null, refImageUrl: (kind === "video" ? node?.kf : null) || null };
+      // 逐镜参数注入：keyframe 取图片尺寸；video 取画幅/分辨率/时长（空则不带，交给全局兜底）
+      if (kind === "keyframe") {
+        if (node?.img_size) base.size = node.img_size;
+      } else {
+        if (node?.video_ratio)      base.ratio = node.video_ratio;
+        if (node?.video_resolution) base.resolution = node.video_resolution;
+        if (node?.video_duration_s != null) base.durationS = node.video_duration_s;
+      }
+      return base;
     }
     if (kind === "fx") {
       const p = q(`SELECT text FROM prompt WHERE scene_node_id=? AND pkey='fx'`).get(refId);
-      const node = q(`SELECT kf FROM scene_node WHERE id=?`).get(refId);
-      return { prompt: p?.text || null, refImageUrl: node?.kf || null };
+      const node = q(`SELECT kf,video_ratio,video_resolution,video_duration_s FROM scene_node WHERE id=?`).get(refId);
+      const base = { prompt: p?.text || null, refImageUrl: node?.kf || null };
+      if (node?.video_ratio)      base.ratio = node.video_ratio;
+      if (node?.video_resolution) base.resolution = node.video_resolution;
+      if (node?.video_duration_s != null) base.durationS = node.video_duration_s;
+      return base;
     }
     if (kind === "char_ref") {
       const p = q(`SELECT text FROM prompt WHERE pkey=? LIMIT 1`).get(`char_${refId}`);
@@ -441,19 +480,42 @@ export function makeDao(db) {
     return {};
   };
 
+  // 逐镜参数写入：仅更新传入的非空字段，供前端每幕单独设置尺寸/时长。
+  const updateSceneParams = (sceneNodeId, { imgSize, videoRatio, videoResolution, videoDurationS } = {}) => {
+    const cols = [], vals = [];
+    if (imgSize !== undefined)         { cols.push("img_size=?");          vals.push(imgSize || null); }
+    if (videoRatio !== undefined)      { cols.push("video_ratio=?");       vals.push(videoRatio || null); }
+    if (videoResolution !== undefined) { cols.push("video_resolution=?");  vals.push(videoResolution || null); }
+    if (videoDurationS !== undefined)  { cols.push("video_duration_s=?");  vals.push(videoDurationS == null || videoDurationS === "" ? null : Number(videoDurationS)); }
+    if (!cols.length) return getSceneParams(sceneNodeId);
+    vals.push(sceneNodeId);
+    q(`UPDATE scene_node SET ${cols.join(",")} WHERE id=?`).run(...vals);
+    return getSceneParams(sceneNodeId);
+  };
+  const getSceneParams = (sceneNodeId) => {
+    const n = q(`SELECT img_size,video_ratio,video_resolution,video_duration_s FROM scene_node WHERE id=?`).get(sceneNodeId);
+    if (!n) return null;
+    return { imgSize: n.img_size || null, videoRatio: n.video_ratio || null,
+      videoResolution: n.video_resolution || null,
+      videoDurationS: n.video_duration_s == null ? null : n.video_duration_s };
+  };
+
   const lockCharacter = (id) => {
     q(`UPDATE character SET locked=1, version=version+1 WHERE id=?`).run(id);
     return q(`SELECT * FROM character WHERE id=?`).get(id);
   };
 
-  const createTask = (pid, { kind, refId, model, prompt, refImageUrl, firstFrameUrl, webhook, chain }) => {
+  const createTask = (pid, { kind, refId, model, prompt, refImageUrl, firstFrameUrl, webhook, chain,
+                             size, ratio, resolution, durationS }) => {
     const id = uid("g_"), t = now();
     const titleMap = { char_ref: "角色参考图", keyframe: "关键帧", fx: "动效", video: "视频片段", voice: "配音", bgm: "配乐" };
-    q(`INSERT INTO gen_task(id,project_id,kind,title,sub,status,progress,ref_id,model,prompt,ref_image_url,first_frame_url,chain,webhook,created_at,updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    q(`INSERT INTO gen_task(id,project_id,kind,title,sub,status,progress,ref_id,model,prompt,ref_image_url,first_frame_url,chain,webhook,size,ratio,resolution,duration_s,created_at,updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(id, pid, kind, `${titleMap[kind] || kind} 任务`, `${kind} · 已提交`, "queued", 0,
         refId || null, model || null, prompt || null, refImageUrl || null, firstFrameUrl || null,
-        chain ? 1 : 0, webhook || null, t, t);
+        chain ? 1 : 0, webhook || null,
+        size || null, ratio || null, resolution || null,
+        durationS == null || durationS === "" ? null : Number(durationS), t, t);
     return getTask(id);
   };
 
@@ -530,6 +592,7 @@ export function makeDao(db) {
     getProject, getBrief, getDialogue, getScript, getCharacters, getScenes, getGeneric,
     getTasks, getTask, getTimeline, addDialogue, upsertPrompt, getPrompts, resolveGenInput, lockCharacter,
     createTask, updateTask, rawTask, addMedia, attachKeyframe, setCharacterImg, ingestMedia,
+    updateSceneParams, getSceneParams,
     createExport, touchProjectStatus,
     upsertBriefPatch, tagLastUserMessage,
     listProjects, createProject, updateProject, deleteProject,

@@ -241,6 +241,36 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/Prompt' }
 
+  /scenes/{sceneNodeId}/params:
+    parameters:
+      - name: sceneNodeId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Script]
+      summary: 获取该幕的逐镜参数（图片尺寸 / 视频比例·分辨率·时长）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SceneParams' }
+    patch:
+      tags: [Script]
+      summary: 更新该幕逐镜参数（空串表示恢复为跟随全局默认；仅传的字段才更新）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SceneParams' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SceneParams' }
+
   # ---------------- Gen tasks ----------------
   /gen-tasks:
     get:
@@ -658,6 +688,27 @@ components:
         hint: { type: string }
         text: { type: string }
         version: { type: integer }
+
+    SceneParams:
+      type: object
+      description: 逐镜参数覆盖。任一字段为空/未设时，生成时回退到全局设置默认值。
+      properties:
+        imgSize:
+          type: string
+          nullable: true
+          description: 关键帧图片尺寸，如 "1536x1024"
+        videoRatio:
+          type: string
+          nullable: true
+          description: 视频画幅比例，如 "16:9" / "9:16" / "adaptive"
+        videoResolution:
+          type: string
+          nullable: true
+          description: 视频分辨率，如 "480p" / "720p" / "1080p"
+        videoDurationS:
+          type: integer
+          nullable: true
+          description: 视频时长（秒）；-1 表示模型自动
 
     GenTaskCreate:
       type: object
