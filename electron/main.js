@@ -140,6 +140,47 @@ function createWindow(port) {
   mainWindow.on("closed", () => { mainWindow = null; });
 }
 
+// GUI 自检（VF_SELFCHECK=1 触发）：在页面上下文里验证 preload 是否成功注入
+// window.VF_TOKEN，并实测一次带令牌的 /v1 请求 + 一次不带令牌请求应被拒。
+// 结果直接打到主进程控制台，无需手动开 DevTools。
+async function runSelfCheck() {
+  const results = [];
+  const ok = (name, pass, detail = "") => results.push({ name, pass, detail });
+  try {
+    await mainWindow.webContents.executeJavaScript("void 0"); // 确保页面已就绪
+    // 1) preload 是否注入了正确的 token
+    const winToken = await mainWindow.webContents.executeJavaScript("window.VF_TOKEN || ''");
+    ok("preload 注入 window.VF_TOKEN", winToken === ACCESS_TOKEN,
+      winToken ? `注入值前 8 位=${winToken.slice(0, 8)}…，期望=${ACCESS_TOKEN.slice(0, 8)}…` : "window.VF_TOKEN 为空");
+
+    // 2) 页面用注入的 token 调 /v1 应 200
+    const authed = await mainWindow.webContents.executeJavaScript(`
+      fetch("/v1/settings", { headers: { Authorization: "Bearer " + (window.VF_TOKEN||"") } })
+        .then(r => r.status).catch(e => "ERR:" + e.message)`);
+    ok("带令牌访问 /v1/settings → 200", authed === 200, `实际=${authed}`);
+
+    // 3) 不带 token 调 /v1 应 401
+    const unauthed = await mainWindow.webContents.executeJavaScript(`
+      fetch("/v1/settings").then(r => r.status).catch(e => "ERR:" + e.message)`);
+    ok("不带令牌访问 /v1/settings → 401", unauthed === 401, `实际=${unauthed}`);
+
+    // 4) /media 免鉴权可达（火山方舟拉图路径）
+    const media = await mainWindow.webContents.executeJavaScript(`
+      fetch("/media/").then(r => r.status).catch(e => "ERR:" + e.message)`);
+    ok("免令牌访问 /media → 非 401", media !== 401, `实际=${media}（404 正常，仅验证不被鉴权拦）`);
+  } catch (e) {
+    ok("自检执行", false, e.message);
+  }
+
+  const allPass = results.every(r => r.pass);
+  console.log("\n╔══════════════ GUI Token 注入自检 ══════════════");
+  for (const r of results) console.log(`║ ${r.pass ? "✓ PASS" : "✗ FAIL"}  ${r.name}${r.detail ? "  ·  " + r.detail : ""}`);
+  console.log(`╠════════════════════════════════════════════════`);
+  console.log(`║ 结论：${allPass ? "全部通过 ✓ GUI Token 注入正常" : "存在失败项 ✗ 请检查上方 FAIL"}`);
+  console.log("╚════════════════════════════════════════════════\n");
+  return allPass;
+}
+
 app.whenReady().then(async () => {
   try {
     const userDataDir = app.getPath("userData");   // ~/Library/Application Support/VideoFlow
@@ -155,6 +196,17 @@ app.whenReady().then(async () => {
     createWindow(port);
     // 隧道在后台异步配置：窗口立即可用，隧道就绪后自动填入 settings（不阻塞 UI）
     setupTunnel(port, userDataDir);
+
+    // GUI Token 注入自检：页面加载完成后跑一遍，结果打到控制台
+    if (process.env.VF_SELFCHECK === "1") {
+      mainWindow.webContents.once("did-finish-load", async () => {
+        const pass = await runSelfCheck();
+        // 自检模式默认跑完即退，便于脚本/CI 拿退出码；设 VF_SELFCHECK_KEEP=1 可保留窗口
+        if (process.env.VF_SELFCHECK_KEEP !== "1") {
+          app.exit(pass ? 0 : 1);
+        }
+      });
+    }
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow(port);

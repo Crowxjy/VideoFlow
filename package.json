@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "check": "VF_SELFCHECK=1 electron .",
     "dist": "electron-builder --mac"
   },
   "devDependencies": {

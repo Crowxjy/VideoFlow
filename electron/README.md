@@ -39,9 +39,37 @@ npm install
 
 ## 开发运行（不打包，直接起窗口）
 
+一键脚本（推荐，自动检查/安装依赖后启动）：
+
+```bash
+bash scripts/mac-start.sh          # 正常启动 GUI
+# 或双击仓库根目录的 start.command
+```
+
+或直接用 npm：
+
 ```bash
 npm start
 ```
+
+## 验证 GUI Token 注入（自检）
+
+桌面版每次启动生成随机令牌，经 preload 注入 `window.VF_TOKEN`，前端据此访问已鉴权的
+`/v1`。用自检模式可一键验证这条链路是否打通（结果直接打到终端，无需开 DevTools）：
+
+```bash
+bash scripts/mac-start.sh --check   # 跑完自动退出，退出码 0=通过 / 1=失败
+# 或：  npm run check
+# 想保留窗口边看边核对：  bash scripts/mac-start.sh --keep
+```
+
+自检会依次校验：
+1. `window.VF_TOKEN` 是否被 preload 正确注入（与主进程令牌一致）
+2. 页面带令牌访问 `/v1/settings` → 应 **200**
+3. 页面不带令牌访问 `/v1/settings` → 应 **401**
+4. 免令牌访问 `/media/` → 应**非 401**（火山方舟拉图路径不被鉴权拦）
+
+终端会打印 `✓ PASS / ✗ FAIL` 清单与总结论。
 
 首次打开后，点右上角「⚙ 设置」填入三个通道的密钥即可使用：
 
