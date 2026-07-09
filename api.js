@@ -189,6 +189,21 @@ const API = (() => {
     },
     deleteGenericAsset: (id) => http("DELETE", `/generic-assets/${id}`),
 
+    // ---- 资源包导入（.zip）：解析并批量导入媒体到素材库 ----
+    importAssetPack(file) {
+      const headers = { "Content-Type": "application/zip" };
+      if (token) headers["Authorization"] = "Bearer " + token;
+      return fetch(`${base}/projects/${PID()}/asset-pack:import`, {
+        method: "POST", headers, body: file,
+      }).then(async r => {
+        if (!r.ok) {
+          let err; try { err = await r.json(); } catch { err = { message: r.statusText }; }
+          throw Object.assign(new Error(err.message || `导入失败(${r.status})`), { status: r.status });
+        }
+        return r.json();
+      });
+    },
+
     // ---- 在线模型凭证配置 ----
     getSettings: () => http("GET", `/settings`),
     saveSettings: (patch) => http("PUT", `/settings`, patch),

@@ -17,6 +17,7 @@ import { openDb, makeDao } from "./db.js";
 import { makeProvider, makeSettings } from "./providers.js";
 import { makeQueue } from "./queue.js";
 import { ChatService } from "./chat.js";
+import { unzip } from "./unzip.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");          // 前端静态目录（打包后为只读）
@@ -111,14 +112,69 @@ function safeExt(rawExt, mime) {
   return "." + cleaned.toLowerCase();
 }
 
-async function serveStatic(res, baseDir, rel) {
+// ---------- 资源包导入辅助 ----------
+// 按扩展名推断 mime（导入时 zip 条目无 Content-Type，只能靠后缀）。
+const EXT_TO_MIME = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp",
+  gif: "image/gif", svg: "image/svg+xml",
+  mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime",
+  mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg",
+  pdf: "application/pdf", json: "application/json", md: "text/markdown", txt: "text/plain",
+};
+// 素材可导入的媒体类型（其余如 .md/.json 视为文档，跳过实体导入但计入清单）。
+const MEDIA_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif", "svg", "mp4", "webm", "mov", "mp3", "wav", "ogg"]);
+// 归一化 zip 条目路径为素材类型标签：按目录名（含中文导出包约定）+ 扩展名双重判断。
+function classifyEntry(path, ext) {
+  const lower = path.toLowerCase();
+  const isImg = ["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(ext);
+  const isVid = ["mp4", "webm", "mov"].includes(ext);
+  const isAud = ["mp3", "wav", "ogg"].includes(ext);
+  // 目录约定（兼容本项目导出包的中文目录名）
+  if (/(^|\/)(character|角色|角色图)(\/|$)/.test(lower) && isImg) return "character";
+  if (/(^|\/)(keyframes?|关键帧|首帧)(\/|$)/.test(lower) && isImg) return "keyframe";
+  if (/(^|\/)(videos?|视频|成片|片段)(\/|$)/.test(lower) && isVid) return "video";
+  if (/(^|\/)(voice|audio|配音|音频|旁白)(\/|$)/.test(lower) && isAud) return "voice";
+  // 无目录线索时按媒体大类归档
+  if (isVid) return "video";
+  if (isAud) return "voice";
+  if (isImg) return "image";
+  return "other";
+}
+
+async function serveStatic(res, baseDir, rel, req) {
   const safe = normalize(rel).replace(/^(\.\.[/\\])+/, "");
   const fp = join(baseDir, safe);
   try {
     const s = await stat(fp);
-    if (s.isDirectory()) return serveStatic(res, baseDir, join(rel, "index.html"));
+    if (s.isDirectory()) return serveStatic(res, baseDir, join(rel, "index.html"), req);
+    const ctype = MIME[extname(fp)] || "application/octet-stream";
+    const cors = res._cors || CORS_BASE;
+    // Range 支持：视频/音频 <video>/<audio> 会发 Range 请求以支持拖动与分段加载。
+    // 不处理会导致浏览器整段拉取后中断 → ERR_INVALID_CHUNKED_ENCODING/ERR_ABORTED。
+    const range = req?.headers?.range;
+    if (range) {
+      const mm = /^bytes=(\d*)-(\d*)$/.exec(range);
+      if (mm) {
+        let start = mm[1] === "" ? null : parseInt(mm[1], 10);
+        let end   = mm[2] === "" ? null : parseInt(mm[2], 10);
+        const size = s.size;
+        if (start === null) { start = size - end; end = size - 1; }  // 后缀区间 bytes=-N
+        else if (end === null) end = size - 1;
+        if (start > end || start < 0 || end >= size) {
+          res.writeHead(416, { "Content-Range": `bytes */${size}`, ...cors });
+          res.end(); return true;
+        }
+        const buf = await readFile(fp);
+        res.writeHead(206, {
+          "Content-Type": ctype, "Content-Range": `bytes ${start}-${end}/${size}`,
+          "Accept-Ranges": "bytes", "Content-Length": end - start + 1, ...cors,
+        });
+        res.end(buf.subarray(start, end + 1));
+        return true;
+      }
+    }
     const buf = await readFile(fp);
-    res.writeHead(200, { "Content-Type": MIME[extname(fp)] || "application/octet-stream", ...(res._cors || CORS_BASE) });
+    res.writeHead(200, { "Content-Type": ctype, "Accept-Ranges": "bytes", "Content-Length": buf.length, ...cors });
     res.end(buf);
     return true;
   } catch { return false; }
@@ -140,13 +196,13 @@ const server = createServer(async (req, res) => {
 
   // 产物
   if (p.startsWith("/media/")) {
-    if (await serveStatic(res, MEDIA_DIR, p.slice("/media/".length))) return;
+    if (await serveStatic(res, MEDIA_DIR, p.slice("/media/".length), req)) return;
     return fail(res, 404, "NOT_FOUND", "产物不存在");
   }
   // 静态前端（非 /v1 一律走静态；根路径 -> index.html）
   if (!p.startsWith(BASE)) {
     const rel = p === "/" ? "index.html" : p.slice(1);
-    if (await serveStatic(res, ROOT, rel)) return;
+    if (await serveStatic(res, ROOT, rel, req)) return;
     return fail(res, 404, "NOT_FOUND", "页面不存在");
   }
 
@@ -273,6 +329,46 @@ const server = createServer(async (req, res) => {
         });
         return json(res, 201, { id: row.id, name: row.name, desc: row.descr, type: row.asset_type,
           url: row.url, mime: row.mime, size: row.size, createdAt: row.created_at });
+      }
+      // POST /projects/{id}/asset-pack:import  上传资源包(.zip)，解析并批量导入素材
+      //   兼容两类：① 本项目导出的成片包（videos/keyframes/character 约定目录）
+      //            ② 任意素材 zip（按扩展名归类为 image/video/voice/other）
+      //   每个媒体文件落 generic_asset 表（可在素材库预览）；.md/.json 等文档跳过实体导入。
+      if (seg[2] === "asset-pack:import" && m === "POST") {
+        let zipBuf;
+        try { zipBuf = await readBinary(req, 300 * 1024 * 1024); }  // 整包上限 300MB
+        catch (e) { return fail(res, 413, "PAYLOAD_TOO_LARGE", e.message); }
+        if (!zipBuf.length) return fail(res, 400, "BAD_REQUEST", "资源包内容为空");
+        let parsed;
+        try { parsed = unzip(zipBuf); }
+        catch (e) { return fail(res, 400, "BAD_ZIP", e.message); }
+
+        await mkdir(MEDIA_DIR, { recursive: true });
+        const imported = [], skipped = [...parsed.skipped];
+        for (const entry of parsed.entries) {
+          // Zip Slip 防护：归一化并拒绝穿越；只取纯文件名用于展示。
+          const safe = normalize(entry.path).replace(/^(\.\.[/\\])+/, "");
+          if (safe.includes("..")) { skipped.push({ path: entry.path, reason: "路径非法" }); continue; }
+          const base = safe.split("/").pop() || "asset";
+          const rawExt = (base.includes(".") ? base.split(".").pop() : "").toLowerCase();
+          // 跳过隐藏文件与非媒体文档（仍计入 skipped 供用户知情）
+          if (base.startsWith(".")) { skipped.push({ path: entry.path, reason: "隐藏文件" }); continue; }
+          if (!MEDIA_EXTS.has(rawExt)) { skipped.push({ path: entry.path, reason: `非媒体文件(.${rawExt || "?"})` }); continue; }
+
+          const type = classifyEntry(safe, rawExt);
+          const mime = EXT_TO_MIME[rawExt] || "application/octet-stream";
+          const ext  = safeExt(rawExt, mime);
+          const fname = `imp_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}${ext}`;
+          await writeFile(join(MEDIA_DIR, fname), entry.data);
+          const row = dao.addGenericAsset(pid, {
+            name: base, desc: `资源包导入 · ${safe}`, type,
+            url: `/media/${fname}`, mime, size: entry.data.length,
+          });
+          imported.push({ id: row.id, name: row.name, type: row.asset_type,
+            url: row.url, mime: row.mime, size: row.size });
+        }
+        return json(res, 201, { imported: imported.length, skipped: skipped.length,
+          items: imported, skippedDetail: skipped });
       }
       if (seg[2] === "timeline" && m === "GET") return json(res, 200, dao.getTimeline(pid));
       // POST /projects/{id}/media:ingest?kind=&refId=  外部 Agent 交付媒体产物（文生图/配音/视频等）

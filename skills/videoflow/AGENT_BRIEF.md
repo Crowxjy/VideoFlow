@@ -154,6 +154,12 @@ videoflow gen chain --json          # 按当前脚本各幕顺序提交视频链
 videoflow export > cut.json         # ingest 与 submit 的产物统一聚合；视频缺失不阻断
 ```
 
+> **资源包导入（.zip）**：把成片包或任意含图片/视频/音频的 zip 一键导入素材库。
+> 二进制流 POST 到 `POST /projects/{id}/asset-pack:import`（Content-Type: application/zip）。
+> 后端零依赖解压，按目录约定（videos/keyframes/character，兼容中文导出包）+ 扩展名归类，
+> 落 generic_asset（可预览）。返回 `{ imported, skipped, items, skippedDetail }`。
+> 非媒体文件（.md/.json）跳过。整包 ≤300MB，已做 Zip Slip / zip bomb 防护。
+
 ## 3. 错误码
 
 `0` 成功；`1` 业务/网络错误（`--json` 下 stderr 输出 `{error,message,status,body}`）；`2` 用法错误。

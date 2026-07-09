@@ -898,6 +898,15 @@ function renderDrawer(tab) {
     const list = (STATE.generic || []).map(genericItem).join("")
       || `<div class="empty-hint">尚无通用素材。点击上方"上传素材"添加品牌 logo、字幕底、转场素材等。</div>`;
     return `
+      <div class="ga-import card">
+        <div class="ga-up-head">${ICON.asset}<b>导入资源包 (.zip)</b><span class="muted" style="margin-left:auto;font-size:12px">整包 ≤ 300 MB</span></div>
+        <div class="ga-import-hint">上传本项目导出的成片包，或任意含图片/视频/音频的 .zip。系统会自动解压并按类型（关键帧 / 视频 / 角色图 / 音频）导入到素材库，可直接预览。</div>
+        <div class="ga-up-actions">
+          <input id="apFile" type="file" accept=".zip,application/zip" />
+          <button class="btn btn-primary btn-sm" id="apSubmit">${ICON.plus}解析并导入</button>
+          <span class="muted" id="apStatus" style="font-size:12px;margin-left:8px"></span>
+        </div>
+      </div>
       <div class="ga-upload card">
         <div class="ga-up-head">${ICON.asset}<b>上传通用素材</b><span class="muted" style="margin-left:auto;font-size:12px">单文件 ≤ 50 MB</span></div>
         <div class="ga-up-grid">
@@ -967,6 +976,30 @@ function bindGenericUpload(d) {
   // 素材缩略图点击预览
   d.querySelectorAll(".asset-av.is-previewable").forEach(el =>
     el.onclick = () => openPreview(el.dataset.preview, el.dataset.mime));
+  // 资源包(.zip)导入
+  const apFile = d.querySelector("#apFile");
+  const apSubmit = d.querySelector("#apSubmit");
+  const apStatus = d.querySelector("#apStatus");
+  if (apSubmit) apSubmit.onclick = async () => {
+    const file = apFile.files?.[0];
+    if (!file) { apStatus.textContent = "请先选择 .zip 文件"; apStatus.style.color = "var(--danger)"; return; }
+    if (!/\.zip$/i.test(file.name) && file.type !== "application/zip") {
+      apStatus.textContent = "只支持 .zip 资源包"; apStatus.style.color = "var(--danger)"; return;
+    }
+    apSubmit.disabled = true; apStatus.style.color = "var(--txt-2)";
+    apStatus.textContent = `解析并导入中… (${(file.size / 1024 / 1024).toFixed(1)}MB)`;
+    try {
+      const r = await API.importAssetPack(file);
+      STATE.generic = await API.getGeneric();
+      renderDrawer("generic");
+      const skipNote = r.skipped ? `，跳过 ${r.skipped} 项` : "";
+      toast(`资源包已导入 ${r.imported} 个素材${skipNote}`);
+    } catch (e) {
+      apSubmit.disabled = false;
+      apStatus.textContent = "导入失败：" + (e.message || "网络错误");
+      apStatus.style.color = "var(--danger)";
+    }
+  };
   // 删除按钮
   d.querySelectorAll("[data-ga-del]").forEach(b => b.onclick = async () => {
     const ok = await dlgConfirm({
@@ -1004,7 +1037,7 @@ function genericItem(a) {
   const isVideo = a.mime?.startsWith("video/");
   const isAudio = a.mime?.startsWith("audio/");
   const thumb = isImage ? `<img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name)}"/>`
-              : isVideo ? `<video src="${escapeHtml(a.url)}" muted></video>`
+              : isVideo ? `<video src="${escapeHtml(a.url)}" muted playsinline preload="metadata"></video>`
               : isAudio ? `<span style="font-size:11px">${escapeHtml(a.mime || "audio")}</span>`
               : ICON.asset;
   const sizeStr = a.size ? `${(a.size / 1024).toFixed(a.size > 1024 * 1024 ? 1 : 0)}${a.size > 1024 * 1024 ? "MB" : "KB"}` : "";

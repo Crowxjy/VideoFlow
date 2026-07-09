@@ -457,6 +457,43 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/GenericAsset' }
 
+  /projects/{projectId}/asset-pack:import:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [Asset]
+      summary: 上传资源包(.zip)并批量导入素材
+      description: >
+        整包(.zip，≤300MB)二进制流上传。后端零依赖解压（node:zlib），按目录约定
+        （videos/keyframes/character，兼容中文导出包）与扩展名把每个媒体文件归类
+        （keyframe/video/character/voice/image/other）导入 generic_asset，可在素材库预览。
+        非媒体文件（.md/.json 等）跳过并计入 skippedDetail。已做 Zip Slip 防护与 zip bomb 上限。
+      requestBody:
+        required: true
+        content:
+          application/zip:
+            schema: { type: string, format: binary }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  imported: { type: integer, description: 成功导入的媒体数 }
+                  skipped:  { type: integer, description: 跳过的条目数 }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/GenericAsset' }
+                  skippedDetail:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path:   { type: string }
+                        reason: { type: string }
+
   # ---------------- Timeline (P1) ----------------
   /projects/{projectId}/timeline:
     parameters:
