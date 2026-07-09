@@ -140,6 +140,35 @@ function classifyEntry(path, ext) {
   if (isImg) return "image";
   return "other";
 }
+// 归一化标题/名称用于宽松匹配（去空格、下划线、连字符，转小写）。
+function normName(s) { return String(s || "").toLowerCase().replace(/[\s_\-]+/g, ""); }
+// 尝试把 zip 条目匹配到某一幕 / 某个角色，命中返回 { kind, refId }，否则 null。
+//   scenes:     [{ id, order, title }]（来自 getScript）
+//   characters: [{ id, name }]（来自 getCharacters）
+// 匹配依据本项目导出包的命名约定：关键帧/视频用「NN_标题」，角色图用「角色名…」。
+function matchPackRef(type, base, scenes, characters) {
+  const stem = base.replace(/\.[^.]+$/, "");   // 去扩展名
+  if ((type === "keyframe" || type === "video") && scenes.length) {
+    const kind = type === "video" ? "video" : "keyframe";
+    // 优先：文件名前导序号 → scene.order
+    const mm = /^(\d{1,3})\b/.exec(stem) || /^(\d{1,3})[_\-]/.exec(stem);
+    if (mm) {
+      const ord = parseInt(mm[1], 10);
+      const byOrd = scenes.find(s => Number(s.order) === ord);
+      if (byOrd) return { kind, refId: byOrd.id };
+    }
+    // 回退：标题包含匹配
+    const n = normName(stem);
+    const byTitle = scenes.find(s => s.title && normName(s.title) && n.includes(normName(s.title)));
+    if (byTitle) return { kind, refId: byTitle.id };
+  }
+  if (type === "character" && characters.length) {
+    const n = normName(stem);
+    const byName = characters.find(c => c.name && normName(c.name) && n.includes(normName(c.name)));
+    if (byName) return { kind: "char_ref", refId: byName.id };
+  }
+  return null;
+}
 
 async function serveStatic(res, baseDir, rel, req) {
   const safe = normalize(rel).replace(/^(\.\.[/\\])+/, "");
@@ -333,7 +362,9 @@ const server = createServer(async (req, res) => {
       // POST /projects/{id}/asset-pack:import  上传资源包(.zip)，解析并批量导入素材
       //   兼容两类：① 本项目导出的成片包（videos/keyframes/character 约定目录）
       //            ② 任意素材 zip（按扩展名归类为 image/video/voice/other）
-      //   每个媒体文件落 generic_asset 表（可在素材库预览）；.md/.json 等文档跳过实体导入。
+      //   智能回挂(remap，默认开)：按「NN_标题 / 角色名」把关键帧回挂到分镜、角色图回挂到角色、
+      //   视频登记为该幕的完成产物；无法匹配或关闭时落 generic_asset（素材库可预览）。
+      //   .md/.json 等文档跳过实体导入。?remap=0 可关闭智能回挂。
       if (seg[2] === "asset-pack:import" && m === "POST") {
         let zipBuf;
         try { zipBuf = await readBinary(req, 300 * 1024 * 1024); }  // 整包上限 300MB
@@ -342,6 +373,11 @@ const server = createServer(async (req, res) => {
         let parsed;
         try { parsed = unzip(zipBuf); }
         catch (e) { return fail(res, 400, "BAD_ZIP", e.message); }
+
+        const remap = url.searchParams.get("remap") !== "0";
+        // 回挂目标：当前项目的分镜（含 order/title）与角色（含 name）
+        const scenes = remap ? (dao.getScript(pid)?.scenes || []) : [];
+        const characters = remap ? dao.getCharacters(pid) : [];
 
         await mkdir(MEDIA_DIR, { recursive: true });
         const imported = [], skipped = [...parsed.skipped];
@@ -360,14 +396,29 @@ const server = createServer(async (req, res) => {
           const ext  = safeExt(rawExt, mime);
           const fname = `imp_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}${ext}`;
           await writeFile(join(MEDIA_DIR, fname), entry.data);
-          const row = dao.addGenericAsset(pid, {
-            name: base, desc: `资源包导入 · ${safe}`, type,
-            url: `/media/${fname}`, mime, size: entry.data.length,
-          });
-          imported.push({ id: row.id, name: row.name, type: row.asset_type,
-            url: row.url, mime: row.mime, size: row.size });
+          const mediaUrl = `/media/${fname}`;
+
+          // 智能回挂：命中分镜/角色则走 ingestMedia（关键帧挂幕、角色图挂角色、视频登记完成产物）
+          const match = remap ? matchPackRef(type, base, scenes, characters) : null;
+          if (match) {
+            dao.ingestMedia(pid, { kind: match.kind, refId: match.refId, url: mediaUrl, mime,
+              width: null, height: null, duration_s: null, has_alpha: false });
+            const boundTo = match.kind === "char_ref"
+              ? (characters.find(c => c.id === match.refId)?.name || match.refId)
+              : `幕${scenes.find(s => s.id === match.refId)?.order ?? "?"}`;
+            imported.push({ name: base, kind: match.kind, url: mediaUrl, mime, size: entry.data.length,
+              boundTo });
+          } else {
+            const row = dao.addGenericAsset(pid, {
+              name: base, desc: `资源包导入 · ${safe}`, type,
+              url: mediaUrl, mime, size: entry.data.length,
+            });
+            imported.push({ id: row.id, name: row.name, type: row.asset_type,
+              url: row.url, mime: row.mime, size: row.size });
+          }
         }
-        return json(res, 201, { imported: imported.length, skipped: skipped.length,
+        const bound = imported.filter(x => x.boundTo).length;
+        return json(res, 201, { imported: imported.length, bound, skipped: skipped.length,
           items: imported, skippedDetail: skipped });
       }
       if (seg[2] === "timeline" && m === "GET") return json(res, 200, dao.getTimeline(pid));

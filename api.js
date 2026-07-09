@@ -190,10 +190,12 @@ const API = (() => {
     deleteGenericAsset: (id) => http("DELETE", `/generic-assets/${id}`),
 
     // ---- 资源包导入（.zip）：解析并批量导入媒体到素材库 ----
-    importAssetPack(file) {
+    //   remap=true(默认) 时按命名智能回挂关键帧到分镜、角色图到角色
+    importAssetPack(file, { remap = true } = {}) {
       const headers = { "Content-Type": "application/zip" };
       if (token) headers["Authorization"] = "Bearer " + token;
-      return fetch(`${base}/projects/${PID()}/asset-pack:import`, {
+      const qs = remap ? "" : "?remap=0";
+      return fetch(`${base}/projects/${PID()}/asset-pack:import${qs}`, {
         method: "POST", headers, body: file,
       }).then(async r => {
         if (!r.ok) {

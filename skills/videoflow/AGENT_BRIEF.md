@@ -156,8 +156,10 @@ videoflow export > cut.json         # ingest 与 submit 的产物统一聚合；
 
 > **资源包导入（.zip）**：把成片包或任意含图片/视频/音频的 zip 一键导入素材库。
 > 二进制流 POST 到 `POST /projects/{id}/asset-pack:import`（Content-Type: application/zip）。
-> 后端零依赖解压，按目录约定（videos/keyframes/character，兼容中文导出包）+ 扩展名归类，
-> 落 generic_asset（可预览）。返回 `{ imported, skipped, items, skippedDetail }`。
+> 后端零依赖解压，按目录约定（videos/keyframes/character，兼容中文导出包）+ 扩展名归类。
+> **智能回挂**（默认开）：按「NN_标题 / 角色名」把关键帧挂回分镜、角色图挂回角色、视频登记为该幕
+> 完成产物；未匹配的落 generic_asset（可预览）。`?remap=0` 可关闭，全部当通用素材导入。
+> 返回 `{ imported, bound, skipped, items, skippedDetail }`（bound=回挂数）。
 > 非媒体文件（.md/.json）跳过。整包 ≤300MB，已做 Zip Slip / zip bomb 防护。
 
 ## 3. 错误码

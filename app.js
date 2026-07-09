@@ -900,7 +900,8 @@ function renderDrawer(tab) {
     return `
       <div class="ga-import card">
         <div class="ga-up-head">${ICON.asset}<b>导入资源包 (.zip)</b><span class="muted" style="margin-left:auto;font-size:12px">整包 ≤ 300 MB</span></div>
-        <div class="ga-import-hint">上传本项目导出的成片包，或任意含图片/视频/音频的 .zip。系统会自动解压并按类型（关键帧 / 视频 / 角色图 / 音频）导入到素材库，可直接预览。</div>
+        <div class="ga-import-hint">上传本项目导出的成片包，或任意含图片/视频/音频的 .zip。系统会自动解压并按类型（关键帧 / 视频 / 角色图 / 音频）导入，可直接预览。</div>
+        <label class="ga-import-remap"><input id="apRemap" type="checkbox" checked /><span>智能回挂：按「序号_标题 / 角色名」把关键帧挂回分镜、角色图挂回角色（识别本项目成片包）</span></label>
         <div class="ga-up-actions">
           <input id="apFile" type="file" accept=".zip,application/zip" />
           <button class="btn btn-primary btn-sm" id="apSubmit">${ICON.plus}解析并导入</button>
@@ -980,6 +981,7 @@ function bindGenericUpload(d) {
   const apFile = d.querySelector("#apFile");
   const apSubmit = d.querySelector("#apSubmit");
   const apStatus = d.querySelector("#apStatus");
+  const apRemap = d.querySelector("#apRemap");
   if (apSubmit) apSubmit.onclick = async () => {
     const file = apFile.files?.[0];
     if (!file) { apStatus.textContent = "请先选择 .zip 文件"; apStatus.style.color = "var(--danger)"; return; }
@@ -989,11 +991,14 @@ function bindGenericUpload(d) {
     apSubmit.disabled = true; apStatus.style.color = "var(--txt-2)";
     apStatus.textContent = `解析并导入中… (${(file.size / 1024 / 1024).toFixed(1)}MB)`;
     try {
-      const r = await API.importAssetPack(file);
+      const r = await API.importAssetPack(file, { remap: apRemap?.checked !== false });
       STATE.generic = await API.getGeneric();
+      // 回挂会改动分镜/角色，失效缓存以便脚本页与素材库刷新
+      if (r.bound) { STATE.script = null; STATE.characters = []; }
       renderDrawer("generic");
+      const bindNote = r.bound ? `，回挂 ${r.bound} 项到分镜/角色` : "";
       const skipNote = r.skipped ? `，跳过 ${r.skipped} 项` : "";
-      toast(`资源包已导入 ${r.imported} 个素材${skipNote}`);
+      toast(`资源包已导入 ${r.imported} 个素材${bindNote}${skipNote}`);
     } catch (e) {
       apSubmit.disabled = false;
       apStatus.textContent = "导入失败：" + (e.message || "网络错误");
