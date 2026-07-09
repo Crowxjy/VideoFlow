@@ -22,6 +22,7 @@ data/*.db-wal
 
 # Generated media artifacts (large, regeneratable)
 media/
+_exports/
 
 # Logs
 *.log

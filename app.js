@@ -487,7 +487,7 @@ function sceneCard(s) {
   const el = document.createElement("div");
   el.className = "card scene-card";
   const kf = s.kfState === "done"
-    ? `<img src="${s.kf}" alt="关键帧"/>`
+    ? `<img src="${s.kf}" alt="关键帧" class="kf-preview" data-preview="${s.kf}" data-mime="image/png" title="点击预览"/>`
     : s.kfState === "generating"
       ? `<div class="ph">关键帧生成中…</div>`
       : `<div class="ph">${ICON.img}<div style="margin-top:6px">待生成关键帧</div></div>`;
@@ -511,6 +511,8 @@ function sceneCard(s) {
       </div>
     </div>`;
   el.querySelectorAll(".ref-link").forEach(r => r.onclick = () => openDrawer(r.dataset.ref === "char" ? "char" : "scene"));
+  const kfEl = el.querySelector(".kf-preview");
+  if (kfEl) kfEl.onclick = () => openPreview(kfEl.dataset.preview, kfEl.dataset.mime);
   el.querySelector(`[data-prompt]`).onclick = () => openPromptEditor(s);
   el.querySelector(`[data-gen]`).onclick = async () => {
     try {
@@ -649,7 +651,14 @@ function renderTasks(root) {
     renderGenStats(root); return;
   }
   list.innerHTML = STATE.tasks.map(t => {
-    const thumb = t.thumb ? `<img src="${t.thumb}"/>` : ICON.img;
+    const isVideo = (t.mediaMime || "").startsWith("video");
+    const isImg   = (t.mediaMime || "").startsWith("image");
+    // 缩略：视频用 <video>(静音、内联)，图片用 <img>，其余回退图标
+    let thumb;
+    if (isVideo && t.mediaUrl) thumb = `<video src="${t.mediaUrl}" muted playsinline preload="metadata"></video>`;
+    else if (isImg && (t.thumb || t.mediaUrl)) thumb = `<img src="${t.thumb || t.mediaUrl}"/>`;
+    else if (t.thumb) thumb = `<img src="${t.thumb}"/>`;
+    else thumb = ICON.img;
     const pill = {
       queued: `<span class="status-pill status-queued">排队中</span>`,
       running: `<span class="status-pill status-running"><span class="pulse"></span>生成中</span>`,
@@ -657,8 +666,13 @@ function renderTasks(root) {
       failed: `<span class="status-pill status-failed">失败 · 重试</span>`,
       canceled: `<span class="status-pill status-queued">已取消</span>`,
     }[t.status] || "";
+    // 有产物可预览时，缩略图区域可点击放大/播放
+    const previewable = t.status === "done" && t.mediaUrl && (isVideo || isImg);
+    const thumbAttrs = previewable
+      ? ` class="task-thumb is-previewable" data-preview="${t.mediaUrl}" data-mime="${t.mediaMime}" title="点击预览"`
+      : ` class="task-thumb"`;
     return `<div class="card task-row">
-      <div class="task-thumb">${thumb}</div>
+      <div${thumbAttrs}>${thumb}</div>
       <div class="task-info">
         <div class="t">${escapeHtml(t.title)}</div>
         <div class="s">${escapeHtml(t.sub || "")}${t.error ? " · " + escapeHtml(t.error) : ""}</div>
@@ -667,7 +681,33 @@ function renderTasks(root) {
       <div>${pill}</div>
     </div>`;
   }).join("");
+  // 绑定预览点击（打开 lightbox）
+  list.querySelectorAll(".task-thumb.is-previewable").forEach(el => {
+    el.onclick = () => openPreview(el.dataset.preview, el.dataset.mime);
+  });
   renderGenStats(root);
+}
+
+// 素材预览 lightbox：图片显示大图，视频带控件播放；点遮罩/× 关闭
+function openPreview(url, mime) {
+  if (!url) return;
+  const isVideo = (mime || "").startsWith("video");
+  const inner = isVideo
+    ? `<video src="${url}" controls autoplay playsinline class="lb-media"></video>`
+    : `<img src="${url}" class="lb-media" alt="预览"/>`;
+  const mask = document.createElement("div");
+  mask.className = "lightbox-mask";
+  mask.innerHTML = `<div class="lightbox-body">
+    <button class="lightbox-close" title="关闭">✕</button>
+    ${inner}
+    <a class="lightbox-open" href="${url}" target="_blank" rel="noopener">在新标签打开原文件 ↗</a>
+  </div>`;
+  const close = () => { mask.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+  mask.querySelector(".lightbox-close").onclick = close;
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(mask);
 }
 function renderGenStats(root) {
   const c = k => STATE.tasks.filter(t => t.status === k).length;
@@ -816,6 +856,9 @@ function bindGenericUpload(d) {
       statusEl.style.color = "var(--danger)";
     }
   };
+  // 素材缩略图点击预览
+  d.querySelectorAll(".asset-av.is-previewable").forEach(el =>
+    el.onclick = () => openPreview(el.dataset.preview, el.dataset.mime));
   // 删除按钮
   d.querySelectorAll("[data-ga-del]").forEach(b => b.onclick = async () => {
     const ok = await dlgConfirm({
@@ -858,8 +901,12 @@ function genericItem(a) {
               : ICON.asset;
   const sizeStr = a.size ? `${(a.size / 1024).toFixed(a.size > 1024 * 1024 ? 1 : 0)}${a.size > 1024 * 1024 ? "MB" : "KB"}` : "";
   const meta = [a.type, sizeStr, a.mime].filter(Boolean).join(" · ");
+  const previewable = (isImage || isVideo) && a.url;
+  const avAttrs = previewable
+    ? ` class="asset-av is-previewable" data-preview="${escapeHtml(a.url)}" data-mime="${escapeHtml(a.mime)}" title="点击预览"`
+    : ` class="asset-av"`;
   return `<div class="card asset-item">
-    <div class="asset-av">${thumb}</div>
+    <div${avAttrs}>${thumb}</div>
     <div class="asset-meta">
       <div class="n">${escapeHtml(a.name)}</div>
       <div class="d">${escapeHtml(meta)}</div>

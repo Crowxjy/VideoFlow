@@ -215,9 +215,19 @@ export function makeDao(db) {
     return row || null;
   };
 
-  const taskRow = (t) => ({ id: t.id, projectId: t.project_id, kind: t.kind, title: t.title, sub: t.sub,
-    status: t.status, progress: t.progress, thumb: t.thumb, refId: t.ref_id, mediaId: t.media_id, error: t.error,
-    firstFrameUrl: t.first_frame_url || null, lastFrameUrl: t.last_frame_url || null, chain: !!t.chain });
+  // 关联产物的 url/mime（供前端预览用）；无产物则为 null
+  const mediaBrief = (mediaId) => {
+    if (!mediaId) return { url: null, mime: null };
+    const m = q(`SELECT url,mime FROM media WHERE id=?`).get(mediaId);
+    return { url: m?.url || null, mime: m?.mime || null };
+  };
+  const taskRow = (t) => {
+    const mb = mediaBrief(t.media_id);
+    return { id: t.id, projectId: t.project_id, kind: t.kind, title: t.title, sub: t.sub,
+      status: t.status, progress: t.progress, thumb: t.thumb, refId: t.ref_id, mediaId: t.media_id, error: t.error,
+      mediaUrl: mb.url, mediaMime: mb.mime,
+      firstFrameUrl: t.first_frame_url || null, lastFrameUrl: t.last_frame_url || null, chain: !!t.chain };
+  };
 
   const getTasks = (pid, status) => {
     const rows = status
