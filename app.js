@@ -679,7 +679,8 @@ function renderGenStats(root) {
     <div class="stat-line"><span style="color:var(--danger)">失败</span><span class="v">${c("failed")}</span></div>`;
 }
 async function tickTasks(root) {
-  if (CURRENT !== "gen") return;
+  // 离开生成视图时清掉轮询定时器，避免切走后仍每秒空转
+  if (CURRENT !== "gen") { clearInterval(GEN_TIMER); return; }
   try {
     STATE.tasks = await API.getTasks();
     renderTasks(root);

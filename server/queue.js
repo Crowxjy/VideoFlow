@@ -9,10 +9,34 @@ export function makeQueue(dao, provider, { concurrency = 2 } = {}) {
   let running = 0;
   const timers = new Map(); // taskId -> progress interval
 
+  // 校验 webhook 目标：只允许 http(s) 且非私网/回环/链路本地地址，防 SSRF。
+  // 客户端可传入任意 webhook，若不校验会让服务端向内网/元数据地址发请求。
+  function isSafeWebhookUrl(raw) {
+    let u;
+    try { u = new URL(raw); } catch { return false; }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase();
+    if (host === "localhost" || host.endsWith(".localhost")) return false;
+    // IPv4 私网/回环/链路本地/元数据
+    const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (m) {
+      const [a, b] = [Number(m[1]), Number(m[2])];
+      if (a === 127 || a === 10 || a === 0) return false;
+      if (a === 169 && b === 254) return false;            // link-local + 云元数据 169.254.169.254
+      if (a === 172 && b >= 16 && b <= 31) return false;
+      if (a === 192 && b === 168) return false;
+    }
+    // IPv6 回环/唯一本地/链路本地
+    if (host === "::1" || host === "[::1]") return false;
+    if (/^\[?(fc|fd|fe80)/i.test(host)) return false;
+    return true;
+  }
+
   async function callWebhook(url, body) {
     if (!url) return;
+    if (!isSafeWebhookUrl(url)) { console.warn(`[webhook] 拒绝不安全的回调地址: ${url}`); return; }
     try {
-      await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), redirect: "manual" });
     } catch { /* webhook 失败不影响任务本身 */ }
   }
 
