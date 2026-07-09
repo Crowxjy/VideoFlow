@@ -26,5 +26,9 @@ media/
 # Logs
 *.log
 
+# Electron 打包产物
+release/
+dist/
+
 # Trae 工作目录
 .trae/

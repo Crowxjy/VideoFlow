@@ -19,9 +19,11 @@ import { makeQueue } from "./queue.js";
 import { ChatService } from "./chat.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, "..");          // 前端静态目录
-const MEDIA_DIR = join(ROOT, "media");        // 产物目录
-const DATA_DIR  = join(ROOT, "data");         // 数据/配置目录
+const ROOT = join(__dirname, "..");          // 前端静态目录（打包后为只读）
+// 产物/数据目录：默认在仓库内（本地开发），可用环境变量覆盖到用户可写目录
+// （Electron 等打包场景下 App 内部只读，须指向 ~/Library/Application Support/... ）
+const MEDIA_DIR = process.env.VF_MEDIA_DIR || join(ROOT, "media");   // 产物目录
+const DATA_DIR  = process.env.VF_DATA_DIR  || join(ROOT, "data");    // 数据/配置目录
 const PORT = process.env.PORT || 8080;
 const BASE = "/v1";
 const TOKEN = process.env.VF_TOKEN || "";     // 为空则不校验

@@ -1,0 +1,48 @@
+{
+  "name": "videoflow",
+  "version": "0.1.0",
+  "description": "VideoFlow · AI 视频创作工作台（Mac 桌面版）",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "dist": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^37.10.3",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.videoflow.app",
+    "productName": "VideoFlow",
+    "files": [
+      "electron/**",
+      "server/**",
+      "api.js",
+      "app.js",
+      "index.html",
+      "styles.css",
+      "assets/**"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.js"
+    },
+    "mac": {
+      "category": "public.app-category.video",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    },
+    "directories": {
+      "output": "release"
+    }
+  }
+}
